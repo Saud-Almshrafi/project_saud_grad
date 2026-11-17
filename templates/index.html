@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>أرشيف الوثائق <span class="count">{{ total }}</span></h1>
+</div>
+<form method="get" class="card search">
+  <input name="q" value="{{ q }}" placeholder="ابحث بالعنوان أو الرقم أو داخل نص الوثيقة…">
+  <select name="cat">
+    <option value="">كل التصنيفات</option>
+    {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if cat == c.id }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <label class="check"><input type="checkbox" name="smart" value="1" {{ 'checked' if smart }}> 🤖 بحث ذكي</label>
+  <button class="btn">بحث</button>
+</form>
+{% if q and smart %}<p class="muted small">البحث الذكي يرتّب النتائج بالأقرب معنى، ويفهم الكلمات المتشابهة (مثل: إجازة ↔ عطلة).</p>{% endif %}
+
+{% if docs %}
+<div class="grid">
+  {% for d in docs %}
+  <a class="doc card" href="{{ url_for('view', doc_id=d.id) }}">
+    <div class="doc-top">
+      {% if d.category %}<span class="tag">{{ d.category }}</span>{% endif %}
+      {% if d._score is defined %}<span class="score">تطابق {{ d._score }}</span>{% endif %}
+    </div>
+    <h3>{{ d.title }}</h3>
+    <p class="meta">
+      {% if d.doc_number %}رقم: {{ d.doc_number }}{% endif %}
+      {% if d.doc_date %} · {{ d.doc_date }}{% endif %}
+      {% if d.source %} · {{ d.source }}{% endif %}
+    </p>
+    {% if d.summary %}<p class="sum">{{ d.summary[:140] }}{{ '…' if d.summary|length > 140 }}</p>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty card">لا توجد وثائق مطابقة.</div>
+{% endif %}
+{% endblock %}

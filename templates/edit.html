@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}تعديل وثيقة{% endblock %}
+{% block content %}
+<div class="page-head"><h1>تعديل: {{ d.title }}</h1></div>
+<form method="post" class="card form">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <label>العنوان<input name="title" value="{{ d.title }}" required></label>
+  <div class="row">
+    <label>التصنيف
+      <select name="category_id"><option value="">—</option>
+        {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if d.category_id == c.id }}>{{ c.name }}</option>{% endfor %}
+      </select></label>
+    <label>رقم الوثيقة<input name="doc_number" value="{{ d.doc_number or '' }}"></label>
+    <label>التاريخ<input name="doc_date" value="{{ d.doc_date or '' }}"></label>
+    <label>الجهة<input name="source" value="{{ d.source or '' }}"></label>
+  </div>
+  <label>ملاحظات<textarea name="description" rows="3">{{ d.description or '' }}</textarea></label>
+  <label>الملخص<textarea name="summary" rows="4">{{ d.summary or '' }}</textarea></label>
+  <div class="actions"><button class="btn">حفظ</button><a class="btn ghost" href="{{ url_for('view', doc_id=d.id) }}">إلغاء</a></div>
+</form>
+{% endblock %}

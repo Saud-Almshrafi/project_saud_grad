@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}التصنيفات{% endblock %}
+{% block content %}
+<div class="page-head"><h1>إدارة التصنيفات</h1></div>
+<form method="post" class="card search">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input name="name" placeholder="اسم تصنيف جديد" required><button class="btn">إضافة</button>
+</form>
+<div class="card"><table>
+  <tr><th>التصنيف</th><th>عدد الوثائق</th><th></th></tr>
+  {% for c in cats %}<tr><td>{{ c.name }}</td><td>{{ c.n }}</td><td>
+    <form method="post" action="{{ url_for('category_delete', cid=c.id) }}" onsubmit="return confirm('حذف التصنيف؟')">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn danger sm">حذف</button></form></td></tr>{% endfor %}
+</table></div>
+{% endblock %}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}الوثائق والمحفوظات{% endblock %} | إدارة التعليم بحائل</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if g.user %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('index') }}">
+    <span class="logo">🗂️</span>
+    <span><b>الوثائق والمحفوظات</b><small>إدارة التعليم بمنطقة حائل</small></span>
+  </a>
+  <nav>
+    <a href="{{ url_for('index') }}">الأرشيف</a>
+    {% if g.user.role in ('admin','clerk') %}<a href="{{ url_for('upload') }}">+ أرشفة وثيقة</a>{% endif %}
+    {% if g.user.role == 'admin' %}
+      <a href="{{ url_for('categories') }}">التصنيفات</a>
+      <a href="{{ url_for('users') }}">المستخدمون</a>
+    {% endif %}
+  </nav>
+  <form method="post" action="{{ url_for('logout') }}" class="userbox">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <span>{{ g.user.full_name }} <em>({{ ROLES[g.user.role] }})</em></span>
+    <button class="btn ghost sm">خروج</button>
+  </form>
+</header>
+{% endif %}
+<main class="container">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="foot">مشروع تدريب تعاوني · نظام أرشفة الوثائق الإلكتروني</footer>
+</body>
+</html>

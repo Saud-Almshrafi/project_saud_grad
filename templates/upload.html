@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}أرشفة وثيقة{% endblock %}
+{% block content %}
+<div class="page-head"><h1>أرشفة وثيقة جديدة</h1></div>
+<form method="post" enctype="multipart/form-data" class="card form">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <label>الملف (PDF أو صورة ممسوحة)
+    <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" required>
+  </label>
+  <label class="ai-box"><input type="checkbox" name="use_ai" value="1" checked>
+    <span>🤖 <b>استخدم الذكاء الاصطناعي</b><br>
+    <small>يقرأ النص (OCR) ويلخّصه ويقترح العنوان والرقم والتاريخ والتصنيف للحقول الفارغة أدناه.</small></span>
+  </label>
+  <div class="row">
+    <label>العنوان<input name="title" placeholder="اتركه فارغاً ليقترحه النظام"></label>
+    <label>التصنيف
+      <select name="category_id"><option value="">— تلقائي / بدون —</option>
+        {% for c in cats %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="row">
+    <label>رقم الوثيقة<input name="doc_number"></label>
+    <label>التاريخ (هجري أو ميلادي)<input name="doc_date" placeholder="مثال: 1447/05/12"></label>
+    <label>الجهة المصدرة<input name="source"></label>
+  </div>
+  <label>ملاحظات<textarea name="description" rows="3"></textarea></label>
+  <button class="btn">حفظ وأرشفة</button>
+</form>
+{% endblock %}

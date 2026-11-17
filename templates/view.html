@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ d.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ d.title }}</h1>
+  <div class="actions">
+    <a class="btn ghost" href="{{ url_for('file', doc_id=d.id, dl=1) }}">⬇ تحميل</a>
+    {% if g.user.role in ('admin','clerk') %}<a class="btn ghost" href="{{ url_for('edit', doc_id=d.id) }}">تعديل</a>{% endif %}
+    {% if g.user.role == 'admin' %}
+    <form method="post" action="{{ url_for('delete', doc_id=d.id) }}" onsubmit="return confirm('حذف هذه الوثيقة نهائياً؟')">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn danger">حذف</button></form>
+    {% endif %}
+  </div>
+</div>
+<div class="split">
+  <section class="card info">
+    <dl>
+      <dt>التصنيف</dt><dd>{{ d.category or '—' }}</dd>
+      <dt>رقم الوثيقة</dt><dd>{{ d.doc_number or '—' }}</dd>
+      <dt>التاريخ</dt><dd>{{ d.doc_date or '—' }}</dd>
+      <dt>الجهة</dt><dd>{{ d.source or '—' }}</dd>
+      <dt>أُرشفت بواسطة</dt><dd>{{ d.uploader or '—' }}</dd>
+      <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at }}</dd>
+    </dl>
+    {% if d.description %}<h4>ملاحظات</h4><p>{{ d.description }}</p>{% endif %}
+    {% if d.summary %}<h4>🤖 ملخص تلقائي</h4><p class="sum">{{ d.summary }}</p>{% endif %}
+    {% if d.ocr_text %}<details><summary>النص المستخرج (OCR)</summary><pre>{{ d.ocr_text }}</pre></details>{% endif %}
+  </section>
+  <section class="card preview">
+    {% if is_pdf %}<iframe src="{{ url_for('file', doc_id=d.id) }}"></iframe>
+    {% else %}<img src="{{ url_for('file', doc_id=d.id) }}" alt="{{ d.title }}">{% endif %}
+  </section>
+</div>
+{% endblock %}

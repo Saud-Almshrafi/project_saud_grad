@@ -1,0 +1,9 @@
+# أسرار - لا ترفع أبداً
+.env
+
+# ملفات مولّدة
+__pycache__/
+*.pyc
+*.sqlite3
+uploads/*
+!uploads/.gitkeep
