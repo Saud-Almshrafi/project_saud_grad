@@ -381,4 +381,93 @@ assert {"updated_at", "updated_by"} <= cols and oe.execute("SELECT COUNT(*) FROM
 assert {r[1] for r in oe.execute("PRAGMA table_info(document_edits)")} == {"id", "document_id", "user_id", "edited_at", "changes"}
 assert oe.execute("SELECT title, created_at FROM documents WHERE id=1").fetchone() == ("a", "2025-01-01 10:00:00")
 oe.close(); ok("migration (edit log): idempotent, existing docs stay updated_at NULL, no data touched")
+
+# ===================================================== 13) البحث بتاريخ الرفع (date_by)
+# التحويل الهجري → الميلادي يطابق hijri-converter
+for y in range(1400, TY + 1, 3):
+    for mo in (1, 6, 12):
+        for dd in (1, hu.month_length(y, mo)):
+            exp = Hijri(y, mo, dd).to_gregorian()
+            assert hu.hijri_to_gregorian(hu.to_iso(y, mo, dd)) == datetime(exp.year, exp.month, exp.day).date(), (y, mo, dd)
+assert hu.hijri_to_gregorian("1446-09-12") == datetime(2025, 3, 12).date() and hu.hijri_to_gregorian("bad") is None
+ok("hijri_to_gregorian matches hijri-converter")
+# حدود يوم الرياض بتوقيت UTC (النهاية حصرية = بداية اليوم التالي)
+assert hu.upload_bounds_utc("1446-09-12", "1446-09-12") == ("2025-03-11 21:00:00", "2025-03-12 21:00:00")
+assert hu.upload_bounds_utc(None, None) == (None, None) and hu.upload_bounds_utc("1446-09-12", None)[1] is None
+assert hu.riyadh_hijri_date("2025-03-12 20:30:00") == "1446-09-12" and hu.riyadh_hijri_date("2025-03-12 21:10:00") == "1446-09-13"
+ok("upload_bounds_utc: Riyadh day → UTC range")
+
+with A.app.app_context():
+    def addu(title, created, cat, h="1440-01-01"):
+        return db.execute("INSERT INTO documents (title, doc_date_h, category_id, filename, original_name, search_text, created_at) "
+                          "VALUES (%s,%s,%s,%s,%s,%s,%s)", (title, h, cat, "x.png", "x.png", A.ai.build_search_text(title), created))
+    addu("UPM-OLD", "2024-01-01 09:00:00", 1)        # الرياض 2024-01-01 12:00 → 19 جمادى الآخرة 1445
+    addu("UPM-LATE", "2025-03-12 20:30:00", 1)       # الرياض 23:30 يوم 12 رمضان 1446
+    addu("UPM-EARLY", "2025-03-12 21:10:00", 2)      # الرياض 00:10 يوم 13 رمضان 1446
+    addu("UPM-LASTSEC", "2025-03-14 20:59:59", 2)    # الرياض 23:59:59 يوم 14 رمضان 1446
+    addu("UPM-NEXT", "2025-03-14 21:00:00", 1)       # الرياض 00:00:00 يوم 15 رمضان 1446
+    addu("UPM-NOHDATE", "2025-03-13 10:00:00", 1, None)  # بلا تاريخ وثيقة، رُفعت 13 رمضان
+UPM = ["UPM-OLD", "UPM-LATE", "UPM-EARLY", "UPM-LASTSEC", "UPM-NEXT", "UPM-NOHDATE"]
+def fu(**kw):
+    h = v.get("/?" + urlencode(kw)).get_data(as_text=True)
+    return h, [t for t in UPM if f"<h3>{t}</h3>" in h]
+def order(h, names):
+    return sorted(names, key=lambda t: h.index(f"<h3>{t}</h3>"))
+
+h, r = fu(date_from="1446-09-12", date_to="1446-09-14")
+assert r == [] and 'id="date-by-doc" name="date_by" value="doc" checked' in h and "من تاريخ الوثيقة" in h, r
+ok("date_by absent → doc mode (current behaviour)")
+h2, r2 = fu(date_from="1446-09-12", date_to="1446-09-14", date_by="xyz")
+assert r2 == r and "flash error" not in h2 and 'value="doc" checked' in h2; ok("invalid date_by → doc, no error")
+
+h, r = fu(date_from="1446-09-12", date_to="1446-09-14", date_by="upload")
+assert set(r) == {"UPM-LATE", "UPM-EARLY", "UPM-LASTSEC", "UPM-NOHDATE"}, r
+assert order(h, r) == ["UPM-LASTSEC", "UPM-NOHDATE", "UPM-EARLY", "UPM-LATE"], order(h, r)
+ok("upload mode: full range, newest upload first")
+assert 'id="date-by-upload" name="date_by" value="upload" checked' in h and "من تاريخ الرفع" in h and "إلى تاريخ الرفع" in h
+assert 'name="date_from" value="1446-09-12"' in h and 'name="date_to" value="1446-09-14"' in h; ok("mode + both dates kept after search")
+assert "رُفعت: 12 رمضان 1446هـ" in h and "رُفعت: 13 رمضان 1446هـ" in h; ok("cards show 'رُفعت:' (Riyadh day, Hijri) in upload mode")
+h, r = fu(date_from="1446-09-12", date_to="1446-09-12", date_by="upload"); assert r == ["UPM-LATE"], r
+h, r = fu(date_from="1446-09-13", date_to="1446-09-13", date_by="upload"); assert set(r) == {"UPM-EARLY", "UPM-NOHDATE"}, r
+ok("day boundary: 23:30 and 00:10 Riyadh land on their own day only")
+h, r = fu(date_from="1446-09-14", date_to="1446-09-14", date_by="upload"); assert r == ["UPM-LASTSEC"], r
+ok("'to' day inclusive to its last second (23:59:59), next midnight excluded")
+h, r = fu(date_from="1446-09-14", date_by="upload"); assert set(r) == {"UPM-LASTSEC", "UPM-NEXT"}, r; ok("upload: from only")
+h, r = fu(date_to="1446-09-12", date_by="upload"); assert set(r) == {"UPM-OLD", "UPM-LATE"}, r; ok("upload: to only")
+h, r = fu(date_from="1445", date_to="1445", date_by="upload"); assert r == ["UPM-OLD"], r
+h, r = fu(date_from="1446-09", date_to="1446-09", date_by="upload"); assert set(r) == set(UPM) - {"UPM-OLD"}, r; ok("upload: year only / year+month")
+h, r = fu(date_from="1446-09-14", date_to="1446-09-12", date_by="upload")
+assert "يجب ألا يكون بعد" in h and set(r) == set(UPM) and "رُفعت:" not in h; ok("upload: from > to → error, filter not applied")
+h, r = fu(date_from=H(*TOMORROW), date_by="upload"); assert "flash error" in h and set(r) == set(UPM); ok("upload: future date rejected")
+h, r = fu(q="UPM-", cat=2, date_from="1446-09-12", date_to="1446-09-14", date_by="upload")
+assert set(r) == {"UPM-EARLY", "UPM-LASTSEC"}, r; ok("upload: + text search + category")
+h, r = fu(q="UPM-LATE", smart=1, date_from="1446-09-12", date_by="upload"); assert r == ["UPM-LATE"], r
+h, r = fu(q="UPM-LATE", smart=1, date_from="1446-09-13", date_by="upload"); assert r == [], r; ok("upload: + smart search")
+h, r = fu(date_from="1446-09-12", date_to="1446-09-14"); assert "بلا تاريخ،" in h and "رُفعت:" not in h
+h, r = fu(date_from="1446-09-12", date_to="1446-09-14", date_by="upload"); assert "بلا تاريخ" not in h
+ok("notice: shown in doc mode, hidden in upload mode (no NULL created_at)")
+with A.app.app_context():
+    nid = db.execute("INSERT INTO documents (title, filename, original_name, created_at) VALUES (%s,%s,%s,NULL)", ("UPM-NULLCREATED", "x.png", "x.png"))
+h, r = fu(date_from="1446-09-12", date_by="upload")
+assert "1 وثيقة في الأرشيف بلا تاريخ رفع" in h and "<h3>UPM-NULLCREATED</h3>" not in h; ok("NULL created_at → excluded + notice in upload mode")
+with A.app.app_context(): db.execute("DELETE FROM documents WHERE id=%s", (nid,))
+h, r = fu(date_by="upload"); assert set(r) == set(UPM) and "رُفعت:" not in h; ok("upload mode without dates: no filter, cards unchanged")
+h = v.get("/?" + urlencode({"date_from": "1445", "date_to": "1446"})).get_data(as_text=True)
+hd = [t for t in ["HD-EEE", "HD-DDD", "HD-CCC", "HD-BBB", "HD-AAA"] if f"<h3>{t}</h3>" in h]
+assert sorted(hd, key=lambda t: h.index(f"<h3>{t}</h3>")) == ["HD-EEE", "HD-DDD", "HD-CCC", "HD-BBB", "HD-AAA"]; ok("doc mode with filter: newest document date first")
+with A.app.app_context(): any_id = db.query("SELECT id FROM documents ORDER BY id LIMIT 1", one=True)["id"]
+assert a.get(f"/doc/{any_id}").get_data(as_text=True).count("تاريخ الأرشفة") == 1; ok("view: upload date shown once (Hijri + time)")
+
+# فهرس created_at: ترحيل idempotent
+import migrate_created_index
+oi = sqlite3.connect(os.path.join(tmp, "old_idx.db"))
+oi.executescript("CREATE TABLE documents (id INTEGER PRIMARY KEY, title TEXT, created_at TEXT);"
+                 "INSERT INTO documents VALUES (1,'a','2025-01-01 10:00:00'),(2,'b',NULL);")
+s1 = migrate_created_index.migrate(oi, "sqlite"); s2 = migrate_created_index.migrate(oi, "sqlite")
+assert s1 == {"added_index": True, "null_created_at": 1} and s2 == {"added_index": False, "null_created_at": 1}, (s1, s2)
+assert oi.execute("SELECT title, created_at FROM documents ORDER BY id").fetchall() == [("a", "2025-01-01 10:00:00"), ("b", None)]
+oi.close()
+mc = sqlite3.connect(os.environ["SQLITE_PATH"])
+assert migrate_created_index.migrate(mc, "sqlite")["added_index"] is False; mc.close()  # المخطط الجديد فيه الفهرس
+ok("migration (created_at index): idempotent, no data touched")
 print("ALL TESTS PASSED")

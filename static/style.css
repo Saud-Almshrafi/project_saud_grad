@@ -100,8 +100,18 @@ a.stat:hover{transform:translateY(-3px);transition:.15s}
 .date-range .grp{display:flex;align-items:center;gap:.6rem;flex:1 1 300px}
 .date-range .grp>span{white-space:nowrap}
 .date-range .grp .hdp{flex:1}
+/* زر التبديل (تاريخ الوثيقة / تاريخ الرفع): راديو حقيقي مخفي بصرياً + تسميات بشكل مقطعين متجاورين */
+.date-by-row{flex:0 0 100%}
+.date-by{position:relative;display:inline-flex;border:1px solid var(--g);border-radius:10px;overflow:hidden;background:#fff}
+.date-by input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.date-by label{display:block;margin:0;padding:.4rem 1rem;font-size:.9rem;color:var(--g);cursor:pointer;white-space:nowrap;user-select:none}
+.date-by label+input+label{border-inline-start:1px solid var(--g)}
+.date-by input:checked+label{background:var(--g);color:#fff;font-weight:600}
+.date-by input:focus-visible+label{outline:2px solid #2e9e7a;outline-offset:-3px}
+.meta.up-date{margin-top:.15rem}
 @media(max-width:600px){
   .date-range .grp{flex-direction:column;align-items:stretch;gap:.2rem}
+  .date-by{display:flex}.date-by label{flex:1;text-align:center;padding:.5rem .4rem}
   .hdp{max-width:none}
   /* على الجوال: نافذة سفلية ثابتة داخل حدود الشاشة مع خلفية معتمة */
   .hdp-pop,.hdp-pop.hdp-up{position:fixed;top:auto;bottom:8px;left:8px;right:8px !important;width:auto;max-height:85vh;overflow:auto;z-index:1001}

@@ -240,6 +240,35 @@ def format_riyadh(value) -> str:
     return f"{format_hijri(to_iso(h.year, h.month, h.day))} — {hour}:{local.minute:02d} {'ص' if local.hour < 12 else 'م'}"
 
 
+def hijri_to_gregorian(iso: str | None):
+    """'1446-09-12' → date(2025, 3, 12) عبر hijri-converter، أو None إن لم يكن تاريخاً صالحاً."""
+    p = split_iso(iso)
+    if not p:
+        return None
+    g = Hijri(*p).to_gregorian()
+    return datetime(g.year, g.month, g.day).date()
+
+
+def upload_bounds_utc(h_from: str | None, h_to: str | None):
+    """حدود البحث بتاريخ الرفع: يوما «من/إلى» الهجريان بتوقيت الرياض → نطاق UTC للمقارنة مع created_at.
+    يرجع (start, end) نصوصاً 'YYYY-MM-DD HH:MM:SS' بتوقيت UTC، حيث: created_at >= start و created_at < end
+    (end = بداية اليوم التالي لـ«إلى»، فيشمل آخر ثانية منه). أي طرف غائب → None."""
+    def riyadh_midnight_utc(g, plus_days=0):
+        local = datetime(g.year, g.month, g.day, tzinfo=RIYADH) + timedelta(days=plus_days)
+        return local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    gf, gt = hijri_to_gregorian(h_from), hijri_to_gregorian(h_to)
+    return (riyadh_midnight_utc(gf) if gf else None, riyadh_midnight_utc(gt, 1) if gt else None)
+
+
+def riyadh_hijri_date(value) -> str:
+    """وقت UTC من القاعدة → التاريخ الهجري لليوم المقابل بتوقيت الرياض ('YYYY-MM-DD')، أو فارغ."""
+    dt = _as_utc(value)
+    if not dt:
+        return ""
+    h = Gregorian.fromdate(dt.astimezone(RIYADH).date()).to_hijri()
+    return to_iso(h.year, h.month, h.day)
+
+
 def utc_now_str() -> str:
     """الوقت الحالي UTC بصيغة 'YYYY-MM-DD HH:MM:SS' للتخزين في DATETIME (متّسق مع created_at)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

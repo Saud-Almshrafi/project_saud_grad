@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_doc_date_h ON documents (doc_date_h);
+CREATE INDEX IF NOT EXISTS idx_created_at ON documents (created_at);
 CREATE TABLE IF NOT EXISTS document_edits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

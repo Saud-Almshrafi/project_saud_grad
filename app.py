@@ -70,6 +70,12 @@ def _riyadh_filter(v):
     return hu.format_riyadh(v)
 
 
+@app.template_filter("riyadh_day")
+def _riyadh_day_filter(v):
+    """وقت UTC → التاريخ الهجري ليومه بتوقيت الرياض بلا وقت (مثل: 12 جمادى الأولى 1447هـ)."""
+    return hu.format_hijri(hu.riyadh_hijri_date(v))
+
+
 def render_with_picker(tpl, **kw):
     """صفحة فيها مكوّن التقويم الهجري: نرسل معها جدول التقويم المحسوب في الخادم."""
     return render_template(tpl, HIJRI=hu.calendar_data(), **kw)
@@ -176,21 +182,37 @@ def index():
     elif d_from and d_to and d_from > d_to:
         flash("تاريخ «من» يجب ألا يكون بعد تاريخ «إلى»، لم يُطبَّق فلتر التاريخ.", "error")
         d_from = d_to = None
+    # نوع التاريخ: تاريخ الوثيقة (افتراضي) أو تاريخ الرفع. أي قيمة أخرى → doc بلا خطأ.
+    date_by = "upload" if request.args.get("date_by") == "upload" else "doc"
+    date_active = bool(d_from or d_to)
     where, params = [], []
     if cat:
         where.append("d.category_id=%s")
         params.append(cat)
-    if d_from:  # مقارنة نصية صحيحة لأن الصيغة منتظمة YYYY-MM-DD
-        where.append("d.doc_date_h>=%s")
-        params.append(d_from)
-    if d_to:
-        where.append("d.doc_date_h<=%s")
-        params.append(d_to)
+    if date_by == "doc":
+        if d_from:  # مقارنة نصية صحيحة لأن الصيغة منتظمة YYYY-MM-DD
+            where.append("d.doc_date_h>=%s")
+            params.append(d_from)
+        if d_to:
+            where.append("d.doc_date_h<=%s")
+            params.append(d_to)
+    else:
+        # created_at مخزّن UTC (TIMESTAMP + جلسة MySQL بتوقيت UTC، وSQLite يخزّن UTC):
+        # نحوّل يومي الرياض إلى حدود UTC. النهاية حصرية = بداية اليوم التالي لـ«إلى».
+        u_from, u_to = hu.upload_bounds_utc(d_from, d_to)
+        if u_from:
+            where.append("d.created_at>=%s")
+            params.append(u_from)
+        if u_to:
+            where.append("d.created_at<%s")
+            params.append(u_to)
     sql = ("SELECT d.id, d.title, d.doc_number, d.doc_date_h, d.source, d.description, d.summary, d.created_at, "
            "d.search_text, c.name AS category FROM documents d LEFT JOIN categories c ON c.id=d.category_id")
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY d.id DESC"
+    # ترتيب ثابت من قائمة معروفة (لا يأتي من المستخدم): بالتاريخ المختار تنازلياً عند وجود فلتر تاريخ
+    order = {"doc": "d.doc_date_h DESC, d.id DESC", "upload": "d.created_at DESC, d.id DESC"}
+    sql += " ORDER BY " + (order[date_by] if date_active else "d.id DESC")
     docs = db.query(sql, tuple(params))
     if q:
         if smart:
@@ -205,12 +227,14 @@ def index():
     cats = db.query("SELECT * FROM categories ORDER BY name")
     stats = db.query("SELECT COUNT(*) AS n FROM documents", one=True)
     no_date = None
-    if d_from or d_to:  # الوثائق بلا تاريخ تُستبعد عند الفلتر
-        no_date = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+    if date_active:  # الوثائق بلا تاريخ (من النوع المختار) تُستبعد عند الفلتر
+        col = "doc_date_h" if date_by == "doc" else "created_at"
+        no_date = db.query(f"SELECT COUNT(*) AS n FROM documents WHERE {col} IS NULL", one=True)["n"]
     # نعيد للمكوّن القيمة الكاملة فقط (القيم الجزئية من الروابط تبقى في الفلتر لكن لا تُعرض في الخانة)
     show = lambda v: v if hu.split_iso(v) else ""
     return render_with_picker("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"],
-                              f_from=show(f_from), f_to=show(f_to), no_date=no_date)
+                              f_from=show(f_from), f_to=show(f_to), no_date=no_date,
+                              date_by=date_by, date_active=date_active)
 
 
 # --------------------------------------------------------------- رفع وثيقة

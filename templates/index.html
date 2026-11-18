@@ -12,12 +12,22 @@
   </select>
   <label class="check"><input type="checkbox" name="smart" value="1" {{ 'checked' if smart }}> 🤖 بحث ذكي</label>
   <button class="btn">بحث</button>
+  {%- set kind = "تاريخ الرفع" if date_by == "upload" else "تاريخ الوثيقة" %}
   <div class="date-range">
-    <div class="grp"><span>من تاريخ</span>{{ hp.picker("date_from", f_from, role="from", pair="hdp-date_to", label="من تاريخ") }}</div>
-    <div class="grp"><span>إلى تاريخ</span>{{ hp.picker("date_to", f_to, role="to", pair="hdp-date_from", label="إلى تاريخ") }}</div>
+    {# زر التبديل = زرّا راديو حقيقيان باسم date_by خلف التنسيق: يعملان ويُرسلان القيمة الصحيحة حتى بلا JavaScript #}
+    <div class="date-by-row">
+      <div class="date-by" role="radiogroup" aria-label="البحث بين تاريخين حسب">
+        <input type="radio" id="date-by-doc" name="date_by" value="doc" {{ 'checked' if date_by == 'doc' }}>
+        <label for="date-by-doc">تاريخ الوثيقة</label>
+        <input type="radio" id="date-by-upload" name="date_by" value="upload" {{ 'checked' if date_by == 'upload' }}>
+        <label for="date-by-upload">تاريخ الرفع</label>
+      </div>
+    </div>
+    <div class="grp"><span data-date-label="from">من {{ kind }}</span>{{ hp.picker("date_from", f_from, role="from", pair="hdp-date_to", label="من " ~ kind) }}</div>
+    <div class="grp"><span data-date-label="to">إلى {{ kind }}</span>{{ hp.picker("date_to", f_to, role="to", pair="hdp-date_from", label="إلى " ~ kind) }}</div>
   </div>
 </form>
-{% if no_date %}<p class="muted small">⚠ يوجد {{ no_date }} وثيقة في الأرشيف بلا تاريخ، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}
+{% if no_date %}<p class="muted small">⚠ يوجد {{ no_date }} وثيقة في الأرشيف بلا {{ "تاريخ رفع" if date_by == "upload" else "تاريخ" }}، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}
 {% if q and smart %}<p class="muted small">البحث الذكي يرتّب النتائج بالأقرب معنى، ويفهم الكلمات المتشابهة (مثل: إجازة ↔ عطلة).</p>{% endif %}
 
 {% if docs %}
@@ -34,6 +44,7 @@
       {% if d.doc_date_h %} · {{ d.doc_date_h|hijri }}{% endif %}
       {% if d.source %} · {{ d.source }}{% endif %}
     </p>
+    {% if date_by == "upload" and date_active and d.created_at %}<p class="meta up-date">رُفعت: {{ d.created_at|riyadh_day }}</p>{% endif %}
     {% if d.summary %}<p class="sum">{{ d.summary[:140] }}{{ '…' if d.summary|length > 140 }}</p>{% endif %}
   </a>
   {% endfor %}
@@ -42,4 +53,21 @@
 <div class="empty card">لا توجد وثائق مطابقة.</div>
 {% endif %}
 {{ hp.script(HIJRI) }}
+<script>
+/* تحسين فقط: يغيّر عنواني الخانتين فور التبديل. التبديل نفسه لا يمسّ التاريخين المختارين. */
+(function () {
+  var box = document.querySelector(".date-by");
+  if (!box) return;
+  var KIND = { doc: "تاريخ الوثيقة", upload: "تاريخ الرفع" };
+  box.addEventListener("change", function (e) {
+    var kind = KIND[e.target.value] || KIND.doc;
+    document.querySelectorAll("[data-date-label]").forEach(function (s) {
+      var txt = (s.getAttribute("data-date-label") === "from" ? "من " : "إلى ") + kind;
+      s.textContent = txt;
+      var f = s.parentNode.querySelector("[data-display]");
+      if (f) f.setAttribute("aria-label", txt);
+    });
+  });
+})();
+</script>
 {% endblock %}

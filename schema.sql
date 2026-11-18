@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS documents (
   CONSTRAINT fk_documents_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_doc_number (doc_number),
   INDEX idx_category (category_id),
-  INDEX idx_doc_date_h (doc_date_h)
+  INDEX idx_doc_date_h (doc_date_h),
+  INDEX idx_created_at (created_at)  -- البحث بتاريخ الرفع
 ) ENGINE=InnoDB;
 
 -- سجل التعديلات: صف لكل تعديل فعلي على وثيقة
