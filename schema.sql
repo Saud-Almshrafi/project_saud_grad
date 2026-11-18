@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS documents (
   doc_number VARCHAR(60),
   doc_date VARCHAR(20),              -- النص الأصلي للتاريخ كما في الوثيقة (أرشيف فقط)
   doc_date_h CHAR(10) NULL,          -- التاريخ الهجري المعتمد بصيغة YYYY-MM-DD (نص لأن DATE يرفض 30 صفر مثلاً)
+  doc_date_source VARCHAR(10) NULL,  -- مصدر تاريخ الوثيقة: auto (مستخرج عند الرفع) / manual (المستخدم) / backfill (سكربت)
   category_id INT NULL,
   source VARCHAR(150),               -- الجهة المصدرة
   description TEXT,

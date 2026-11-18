@@ -3,6 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1>أرشيف الوثائق <span class="count">{{ total }}</span></h1>
+  {% if missing %}<a class="btn ghost sm need-date-link" href="{{ url_for('missing_dates') }}">⚠ وثائق تحتاج تاريخاً ({{ missing }})</a>{% endif %}
 </div>
 <form method="get" class="card search">
   <input name="q" value="{{ q }}" placeholder="ابحث بالعنوان أو الرقم أو داخل نص الوثيقة…">
@@ -27,7 +28,12 @@
     <div class="grp"><span data-date-label="to">إلى {{ kind }}</span>{{ hp.picker("date_to", f_to, role="to", pair="hdp-date_from", label="إلى " ~ kind) }}</div>
   </div>
 </form>
-{% if no_date %}<p class="muted small">⚠ يوجد {{ no_date }} وثيقة في الأرشيف بلا {{ "تاريخ رفع" if date_by == "upload" else "تاريخ" }}، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}
+{% if no_date %}<p class="muted small">⚠
+  {%- if date_by == "doc" and missing is not none %}
+  <a href="{{ url_for('missing_dates') }}">يوجد {{ no_date }} وثيقة في الأرشيف بلا تاريخ، ولذلك لا تظهر في نتائج البحث بالتاريخ — أضِف تواريخها</a>
+  {%- else %}
+  يوجد {{ no_date }} وثيقة في الأرشيف بلا {{ "تاريخ رفع" if date_by == "upload" else "تاريخ" }}، ولذلك لا تظهر في نتائج البحث بالتاريخ.
+  {%- endif %}</p>{% endif %}
 {% if q and smart %}<p class="muted small">البحث الذكي يرتّب النتائج بالأقرب معنى، ويفهم الكلمات المتشابهة (مثل: إجازة ↔ عطلة).</p>{% endif %}
 
 {% if docs %}
@@ -41,10 +47,13 @@
     <h3>{{ d.title }}</h3>
     <p class="meta">
       {% if d.doc_number %}رقم: {{ d.doc_number }}{% endif %}
-      {% if d.doc_date_h %} · {{ d.doc_date_h|hijri }}{% endif %}
-      {% if d.source %} · {{ d.source }}{% endif %}
+      {% if d.source %}{{ ' · ' if d.doc_number }}{{ d.source }}{% endif %}
     </p>
-    {% if date_by == "upload" and date_active and d.created_at %}<p class="meta up-date">رُفعت: {{ d.created_at|riyadh_day }}</p>{% endif %}
+    {# تاريخان مختلفان بعنوانين منفصلين: لا يُعرض أحدهما مكان الآخر أبداً #}
+    <p class="meta dates">
+      <span>تاريخ الوثيقة: {% if d.doc_date_h %}{{ d.doc_date_h|hijri }}{% else %}<span class="badge-missing">غير محدد</span>{% endif %}</span>
+      {% if d.created_at %}<span>تاريخ الأرشفة: {{ d.created_at|riyadh_day }}</span>{% endif %}
+    </p>
     {% if d.summary %}<p class="sum">{{ d.summary[:140] }}{{ '…' if d.summary|length > 140 }}</p>{% endif %}
   </a>
   {% endfor %}

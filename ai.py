@@ -74,15 +74,16 @@ def tokens(text: str):
 
 
 # ---------------------------------------------------------------------- OCR
-def extract_text(path: str, ext: str) -> str:
-    """يستخرج النص من PDF أو صورة. للـ PDF يجرّب النص المدمج أولاً ثم OCR."""
+def extract_text(path: str, ext: str, allow_gemini: bool = True) -> str:
+    """يستخرج النص من PDF أو صورة. للـ PDF يجرّب النص المدمج أولاً ثم OCR.
+    allow_gemini=False: محلياً فقط (Tesseract/pdfplumber) دون إرسال الملف إلى Gemini."""
     ext = ext.lower().lstrip(".")
     try:
         if ext == "pdf":
-            return _pdf_text(path)
+            return _pdf_text(path, allow_gemini)
         if ext in {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}:
             # Gemini أولاً (يفهم الصور)، وإن فشل أو لم يُفعَّل نستخدم Tesseract
-            text = gemini_ocr(path, ext)
+            text = gemini_ocr(path, ext) if allow_gemini else ""
             if len(text) >= 20:
                 return text
             return _image_ocr(path)
@@ -132,7 +133,7 @@ def _fix_visual_arabic(text: str) -> str:
     return "\n".join(out)
 
 
-def _pdf_text(path: str) -> str:
+def _pdf_text(path: str, allow_gemini: bool = True) -> str:
     import pdfplumber
     parts = []
     with pdfplumber.open(path) as pdf:
@@ -142,7 +143,7 @@ def _pdf_text(path: str) -> str:
     if len(normalize(text)) >= 40:  # PDF نصّي
         return text
     # PDF ممسوح ضوئياً: Gemini يقرأ الملف مباشرة، وإلا نحوّل الصفحات لصور ثم Tesseract
-    g = gemini_ocr(path, "pdf")
+    g = gemini_ocr(path, "pdf") if allow_gemini else ""
     if len(g) >= 20:
         return g
     from pdf2image import convert_from_path
@@ -242,6 +243,111 @@ def extract_fields(text: str) -> dict:
     return out
 
 
+# ------------------------------------------------- تاريخ الوثيقة (خطوة مستقلة)
+# تاريخ الوثيقة نفسها (في الترويسة أو التوقيع) وليس تاريخ أرشفتها، ولا موعداً أو إشارة لوثيقة أخرى في المتن.
+# الترتيب: Gemini (إن وُجد) ← بديل محلي بالتعابير النمطية. كل نتيجة تمر عبر hijri_utils.parse_any_date.
+_DATE_NUMERIC = re.compile(r"(?<![\d/\-.])(\d{1,4}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{1,4})(\s*(?:هـ|ه|م)(?![ء-ي]))?")
+_KW_BEFORE = re.compile(r"(التاريخ|تاريخ|بتاريخ|وتاريخ|الموافق|المؤرخ[ةه]?)\s*(?:في)?\s*[:：\-]?\s*$")
+_LABEL_KW = {"التاريخ", "تاريخ", "وتاريخ"}
+HEADER_LINES = 6
+
+
+def find_date_candidates(text: str) -> list[dict]:
+    """كل التواريخ الصالحة في النص مع موقعها والكلمة التي تسبقها (إن وُجدت)."""
+    import hijri_utils as hu
+    t = (text or "").translate(_AR_DIGITS).replace("ـ", "").replace("‏", "").replace("‎", "")
+    lines = [ln for ln in t.splitlines() if ln.strip()]
+    out = []
+    for li, line in enumerate(lines):
+        found = []
+        for m in _DATE_NUMERIC.finditer(line):
+            found.append((m.start(), m.end(), m.group(0).strip()))
+        nline = hu._norm_ar(line)
+        for m in hu.NAMED_DATE.finditer(nline):  # الأشهر بأسمائها (على النص الموحَّد؛ المواقع تقريبية)
+            raw = m.group(0) + ("هـ" if nline[m.end():m.end() + 2].strip().startswith("ه") else "")
+            found.append((m.start(), m.end(), raw))
+        for start, _end, raw in found:
+            res = hu.parse_any_date_kind(raw)
+            if not res:
+                continue
+            kw = _KW_BEFORE.search(line[max(0, start - 30):start] if not hu.NAMED_DATE.search(raw) else nline[max(0, start - 30):start])
+            out.append({"iso": res[0], "kind": res[1], "raw": raw, "line": li, "pos": start,
+                        "keyword": kw.group(1) if kw else None})
+    # «1447/05/12هـ الموافق 2025/11/03م»: الميلادي على نفس سطر هجري هو مرادفه → نعتمد الهجري
+    hijri_lines = {c["line"] for c in out if c["kind"] == "h"}
+    return [c for c in out if not (c["kind"] == "g" and c["line"] in hijri_lines)]
+
+
+def pick_document_date(text: str, today: str | None = None) -> dict:
+    """يختار تاريخ الوثيقة من النص بلا تخمين. يرجع {iso, raw, confidence, reason}.
+    confidence: 'high' = تاريخ واحد مرجَّح بوضوح ومقترن بكلمة «تاريخ» (أو كلمة مشابهة في الترويسة)؛
+                'medium' = لا كلمات مفتاحية، وتاريخ واحد فقط في كل الوثيقة يقع في ترويستها؛
+                None = لا شيء أو غموض (والسبب في reason)."""
+    import hijri_utils as hu
+    today = today or hu.today_hijri()
+    cands = find_date_candidates(text)
+    if not cands:
+        return {"iso": None, "raw": None, "confidence": None, "reason": "no_date"}
+    future = [c for c in cands if c["iso"] > today]
+    cands = [c for c in cands if c["iso"] <= today]
+    if not cands:
+        return {"iso": None, "raw": future[0]["raw"], "confidence": None, "reason": "future"}
+
+    def score(c):
+        s = 0
+        if c["keyword"] in _LABEL_KW:
+            s += 3
+        elif c["keyword"]:
+            s += 1
+        if c["line"] < HEADER_LINES:
+            s += 2
+        return s
+
+    best = {}  # iso → أفضل مرشّح له
+    for c in cands:
+        c["score"] = score(c)
+        if c["iso"] not in best or c["score"] > best[c["iso"]]["score"]:
+            best[c["iso"]] = c
+    ranked = sorted(best.values(), key=lambda c: (-c["score"], c["line"], c["pos"]))
+    top, second = ranked[0], (ranked[1] if len(ranked) > 1 else None)
+    keyworded = [c for c in ranked if c["keyword"]]
+    if keyworded:
+        if second and second["score"] == top["score"]:
+            return {"iso": None, "raw": None, "confidence": None, "reason": "ambiguous"}
+        strong = top["keyword"] in _LABEL_KW or (top["keyword"] and top["line"] < HEADER_LINES)
+        if strong and (not second or top["score"] - second["score"] >= 2):
+            return {"iso": top["iso"], "raw": top["raw"], "confidence": "high", "reason": "keyword"}
+        if not strong:  # كلمة مثل «بتاريخ» في المتن فقط: غالباً إشارة لوثيقة أخرى
+            return {"iso": None, "raw": None, "confidence": None, "reason": "reference_only"}
+        return {"iso": None, "raw": None, "confidence": None, "reason": "ambiguous"}
+    if len(ranked) == 1 and top["line"] < HEADER_LINES:
+        return {"iso": top["iso"], "raw": top["raw"], "confidence": "medium", "reason": "single_in_header"}
+    return {"iso": None, "raw": None, "confidence": None, "reason": "no_keyword" if len(ranked) == 1 else "ambiguous"}
+
+
+def extract_document_date(text: str, gemini: dict | None = None, today: str | None = None) -> dict:
+    """الخطوة المستقلة لتاريخ الوثيقة: نتيجة Gemini المنظمة أولاً، ثم البديل المحلي.
+    يرجع {iso, raw, calendar, method ('gemini'|'regex'|None), confidence, reason}."""
+    import hijri_utils as hu
+    today = today or hu.today_hijri()
+    if gemini:
+        for cand in (gemini.get("doc_date_numeric"), gemini.get("doc_date")):
+            res = hu.parse_any_date_kind(cand)
+            if not res:
+                continue
+            cal = (gemini.get("doc_date_calendar") or "").lower()
+            if (cal == "hijri" and res[1] != "h") or (cal == "gregorian" and res[1] != "g"):
+                continue  # تناقض بين التقويم المعلن والقيمة → لا نثق
+            if res[0] > today:
+                break
+            return {"iso": res[0], "raw": gemini.get("doc_date") or cand, "calendar": "hijri" if res[1] == "h" else "gregorian",
+                    "method": "gemini", "confidence": "high", "reason": "gemini"}
+    r = pick_document_date(text, today=today)
+    kind = hu.parse_any_date_kind(r["raw"]) if r["iso"] else None
+    return {"iso": r["iso"], "raw": r["raw"], "calendar": ("hijri" if kind and kind[1] == "h" else "gregorian") if kind else None,
+            "method": "regex" if r["iso"] else None, "confidence": r["confidence"], "reason": r["reason"]}
+
+
 # ------------------------------------------------------- Gemini (اختياري)
 def gemini_enabled() -> bool:
     return bool(os.getenv("GEMINI_API_KEY"))
@@ -257,9 +363,11 @@ def gemini_analyze(text: str, categories: list[str]) -> dict | None:
         "حلّل نص الوثيقة التالي (قد يحتوي أخطاء OCR بسيطة) وأرجع JSON فقط بالحقول:\n"
         "title: عنوان مختصر للموضوع (أقل من 120 حرفاً)\n"
         "doc_number: رقم الوثيقة أو null\n"
-        "doc_date: التاريخ كما ورد (هجري أو ميلادي) أو null\n"
-        "doc_date_numeric: نفس تاريخ الوثيقة بالأرقام بصيغة YYYY/MM/DD وبنفس تقويمه (هجري أو ميلادي، "
-        "مثلاً «12 جمادى الأولى 1447هـ» تصبح 1447/05/12) أو null إن لم يكن واضحاً\n"
+        "document_date: تاريخ الوثيقة نفسها فقط، أي تاريخ إصدار الخطاب أو القرار أو التعميم كما يظهر في ترويستها "
+        "أو بجانب توقيعها. ليس موعداً مذكوراً في المتن، وليس تاريخ وثيقة أخرى يُشار إليها (مثل «إشارة إلى خطابكم بتاريخ…»). "
+        "أرجعه كائناً: {\"raw\": النص الحرفي للتاريخ كما ظهر، \"calendar\": \"hijri\" أو \"gregorian\", "
+        "\"numeric\": نفس التاريخ بالأرقام YYYY/MM/DD وبنفس تقويمه}. إن ظهر الهجري والميلادي معاً "
+        "(مثل «1447/05/12هـ الموافق 2025/11/03م») فاعتمد الهجري. إن لم يوجد تاريخ للوثيقة أو لم يكن واضحاً فأرجع null\n"
         "source: الجهة المصدرة للوثيقة (الإدارة أو الوزارة أو المدرسة التي أصدرتها، من الترويسة أو التوقيع) أو null\n"
         f"category: واحد بالضبط من {json.dumps(categories, ensure_ascii=False)} أو null\n"
         "summary: ملخص بالعربية من 2 إلى 3 جمل يوضح المطلوب والجهة والمواعيد.\n"
@@ -269,8 +377,13 @@ def gemini_analyze(text: str, categories: list[str]) -> dict | None:
         res = json.loads(_gemini_call([{"text": prompt}], json_mode=True))
         if not isinstance(res, dict):
             return None
-        return {k: (str(res[k]).strip() if res.get(k) else None)
-                for k in ("title", "doc_number", "doc_date", "doc_date_numeric", "source", "category", "summary")}
+        out = {k: (str(res[k]).strip() if res.get(k) else None)
+               for k in ("title", "doc_number", "source", "category", "summary")}
+        dd = res.get("document_date") if isinstance(res.get("document_date"), dict) else {}
+        out["doc_date"] = (str(dd.get("raw")).strip() or None) if dd.get("raw") else None
+        out["doc_date_numeric"] = (str(dd.get("numeric")).strip() or None) if dd.get("numeric") else None
+        out["doc_date_calendar"] = (str(dd.get("calendar")).strip().lower() or None) if dd.get("calendar") else None
+        return out
     except Exception:
         return None
 

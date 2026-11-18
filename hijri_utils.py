@@ -71,6 +71,26 @@ def split_iso(s: str | None):
     return (y, mo, d) if is_valid_hijri(y, mo, d) else None
 
 
+def _norm_ar(s: str) -> str:
+    """توحيد بسيط لأسماء الأشهر: الهمزات، ى/ي، ة/ه، التطويل، المسافات."""
+    s = re.sub("[إأآ]", "ا", s).replace("ى", "ي").replace("ة", "ه").replace("ـ", "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+# أسماء الأشهر الهجرية وصيغها الشائعة (بعد التوحيد) → رقم الشهر. «جمادى» وحدها غامضة فلا تُقبل.
+_MONTH_ALIASES = {
+    1: ["محرم"], 2: ["صفر"],
+    3: ["ربيع الاول", "ربيع اول"], 4: ["ربيع الاخر", "ربيع الثاني", "ربيع ثاني", "ربيع اخر"],
+    5: ["جمادي الاولي", "جمادي الاول", "جماد الاول"], 6: ["جمادي الاخره", "جمادي الثانيه", "جمادي الاخر", "جمادي الثاني", "جماد الثاني"],
+    7: ["رجب"], 8: ["شعبان"], 9: ["رمضان"], 10: ["شوال"],
+    11: ["ذو القعده", "ذي القعده"], 12: ["ذو الحجه", "ذي الحجه"],
+}
+MONTH_BY_NAME = {alias: m for m, names in _MONTH_ALIASES.items() for alias in names}
+_MONTH_ALT = "|".join(sorted(map(re.escape, MONTH_BY_NAME), key=len, reverse=True))
+# مثل: «12 ربيع الأول 1447»، «12 من شهر رمضان لعام 1446هـ»
+NAMED_DATE = re.compile(rf"(\d{{1,2}})\s+(?:من\s+)?(?:شهر\s+)?({_MONTH_ALT})\s+(?:(?:لعام|عام|سنه|لسنه)\s+)?(\d{{4}})")
+
+
 def parse_any_date_kind(text: str | None):
     """مثل parse_any_date لكن يرجع أيضاً نوع المصدر: ('1447-05-12', 'h') أو (..., 'g') أو None."""
     t = (text or "").translate(_DIGITS).replace("‏", "").replace("‎", "").strip()
@@ -79,6 +99,12 @@ def parse_any_date_kind(text: str | None):
     marked_h = bool(_HIJRI_MARK.search(t))
     marked_g = bool(_GREG_MARK.search(t))
     t = _GREG_MARK.sub("", _HIJRI_MARK.sub("", t))
+    named = NAMED_DATE.fullmatch(_norm_ar(t))
+    if named:  # الشهر مكتوب باسمه → هجري حتماً
+        y, mo, d = int(named[3]), MONTH_BY_NAME[named[2]], int(named[1])
+        if marked_g or not (HIJRI_RANGE[0] <= y <= HIJRI_RANGE[1]) or not is_valid_hijri(y, mo, d):
+            return None
+        return to_iso(y, mo, d), "h"
     m = _Y_FIRST.fullmatch(t)
     if m:
         y, mo, d = int(m[1]), int(m[2]), int(m[3])

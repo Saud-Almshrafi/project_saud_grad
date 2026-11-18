@@ -1,11 +1,12 @@
 """نظام الوثائق والمحفوظات - إدارة التعليم بمنطقة حائل."""
 import json
 import os
+import re
 import secrets
 import uuid
 from functools import wraps
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
+from flask import (Flask, abort, flash, g, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -158,9 +159,21 @@ def dashboard():
             acc += r["pct"]
     donut = "conic-gradient(" + ", ".join(stops) + ")" if stops else "#e6ece9"
     recent = db.query(
-        "SELECT d.id, d.title, d.doc_date_h, d.created_at, c.name AS category FROM documents d "
+        "SELECT d.id, d.title, d.doc_date_h, d.created_at, c.name AS category FROM documents d "  # noqa: E501
         "LEFT JOIN categories c ON c.id=d.category_id ORDER BY d.id DESC LIMIT 5")
-    return render_template("dashboard.html", rows=rows, total=total, donut=donut, recent=recent)
+    return render_template("dashboard.html", rows=rows, total=total, donut=donut, recent=recent,
+                           missing=missing_count())
+
+
+def can_edit():
+    return bool(g.user) and g.user["role"] in ("admin", "clerk")
+
+
+def missing_count():
+    """عدد الوثائق بلا تاريخ وثيقة (لمن يملك صلاحية التعديل فقط، وإلا None)."""
+    if not can_edit():
+        return None
+    return db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
 
 
 # -------------------------------------------------------- القائمة والبحث
@@ -234,10 +247,103 @@ def index():
     show = lambda v: v if hu.split_iso(v) else ""
     return render_with_picker("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"],
                               f_from=show(f_from), f_to=show(f_to), no_date=no_date,
-                              date_by=date_by, date_active=date_active)
+                              date_by=date_by, date_active=date_active, missing=missing_count())
 
 
 # --------------------------------------------------------------- رفع وثيقة
+_TOKEN = re.compile(r"[0-9a-f]{32}")
+NEED_DATE_MSG = "لم نتمكن من تحديد تاريخ الوثيقة، أضِفه الآن ليظهر في البحث بالتاريخ."
+
+
+def analyze_document(path, ext, cats, use_ai):
+    """تحليل الملف: النص والملخص والحقول (عند تفعيل الذكاء الاصطناعي)، وتاريخ الوثيقة دائماً كخطوة مستقلة.
+    بدون الذكاء الاصطناعي يُقرأ النص محلياً فقط (لا يُرسل لـ Gemini) لاستخراج التاريخ، ولا يُخزَّن النص."""
+    res = {"text": "", "summary": "", "title": None, "doc_number": None, "source": None, "category_id": None,
+           "notes": [], "warn": None,
+           "date": {"iso": None, "raw": None, "method": None, "confidence": None, "reason": "no_text"}}
+    text = ai.extract_text(path, ext, allow_gemini=use_ai)
+    if not text:
+        res["warn"] = "تعذّر استخراج نص من الملف، تأكد من وضوح الصورة."
+        return res
+    gem = None
+    if use_ai:
+        res["text"], res["summary"] = text, ai.summarize(text)
+        fields = ai.extract_fields(text)
+        gem = ai.gemini_analyze(text, [c["name"] for c in cats])
+        if gem:  # Gemini أدق؛ وإن فشل نبقى على النتائج المحلية
+            res["summary"] = gem["summary"] or res["summary"]
+            res["notes"].append("Gemini")
+        elif ai.gemini_enabled():
+            res["warn"] = "تعذّر الاتصال بـ Gemini، استُخدم التحليل المحلي."
+        for k in ("title", "doc_number", "source"):
+            res[k] = ((gem or {}).get(k) or fields[k] or None)
+        if res["source"]:
+            res["source"] = res["source"][:150]
+        guess = (gem or {}).get("category") or ai.classify(text, [c["name"] for c in cats])
+        cat = next((c for c in cats if c["name"] == guess), None)
+        res["category_id"] = cat["id"] if cat else None
+    # تاريخ الوثيقة: خطوة مستقلة (Gemini المنظّم أولاً ثم التعابير النمطية). لا علاقة له بتاريخ الأرشفة.
+    res["date"] = ai.extract_document_date(text, gem)
+    return res
+
+
+def _pending_dir():
+    d = os.path.join(app.config["UPLOAD_FOLDER"], "pending")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _cleanup_pending(max_age=24 * 3600):
+    import time
+    d = _pending_dir()
+    for name in os.listdir(d):
+        p = os.path.join(d, name)
+        try:
+            if time.time() - os.path.getmtime(p) > max_age:
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def _load_pending(token):
+    """ملف حُلِّل مسبقاً (قبل الحفظ) لهذا المستخدم نفسه، أو None."""
+    if not token or not _TOKEN.fullmatch(token):
+        return None
+    meta = os.path.join(_pending_dir(), token + ".json")
+    try:
+        with open(meta, encoding="utf-8") as fh:
+            p = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if p.get("user") != g.user["id"] or not os.path.exists(os.path.join(_pending_dir(), f"{token}.{p['ext']}")):
+        return None
+    p["token"] = token
+    return p
+
+
+@app.route("/upload/analyze", methods=["POST"])
+@login_required({"admin", "clerk"})
+def upload_analyze():
+    """يحلل الملف قبل الحفظ ليُعبَّأ النموذج (ومنه تقويم التاريخ) بما استُخرج، ويستطيع المستخدم تغييره ثم الحفظ."""
+    f = request.files.get("file")
+    if not f or not f.filename or not allowed(f.filename):
+        return jsonify({"error": "نوع الملف غير مدعوم. المسموح: PDF أو صورة"}), 400
+    _cleanup_pending()
+    cats = db.query("SELECT * FROM categories ORDER BY name")
+    token, ext = uuid.uuid4().hex, f.filename.rsplit(".", 1)[1].lower()
+    path = os.path.join(_pending_dir(), f"{token}.{ext}")
+    f.save(path)
+    use_ai = request.form.get("use_ai") == "1"
+    a = analyze_document(path, ext, cats, use_ai)
+    with open(os.path.join(_pending_dir(), token + ".json"), "w", encoding="utf-8") as fh:
+        json.dump({"user": g.user["id"], "ext": ext, "original_name": f.filename[:250], "use_ai": use_ai, "analysis": a},
+                  fh, ensure_ascii=False)
+    iso = a["date"]["iso"]
+    return jsonify({"token": token, "title": a["title"], "doc_number": a["doc_number"], "source": a["source"],
+                    "category_id": a["category_id"], "doc_date_h": iso, "doc_date_text": hu.format_hijri(iso) if iso else "",
+                    "date_reason": a["date"]["reason"], "warn": a["warn"]})
+
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required({"admin", "clerk"})
 def upload():
@@ -245,82 +351,73 @@ def upload():
     pick = request.form.get("doc_date_h", "").strip()
     keep = pick if hu.split_iso(pick) else ""  # نعيد عرض التاريخ الصالح فقط بعد خطأ
     if request.method == "POST":
+        pend = _load_pending(request.form.get("pending", "").strip())
         f = request.files.get("file")
-        if not f or not f.filename:
-            flash("اختر ملفاً للرفع", "error")
-            return render_with_picker("upload.html", cats=cats, pick=keep)
-        if not allowed(f.filename):
-            flash("نوع الملف غير مدعوم. المسموح: PDF أو صورة", "error")
-            return render_with_picker("upload.html", cats=cats, pick=keep)
-        today = hu.today_hijri()
-        date_h, date_err = picked_date(pick, today=today)
+        if not pend:
+            if not f or not f.filename:
+                flash("اختر ملفاً للرفع", "error")
+                return render_with_picker("upload.html", cats=cats, pick=keep)
+            if not allowed(f.filename):
+                flash("نوع الملف غير مدعوم. المسموح: PDF أو صورة", "error")
+                return render_with_picker("upload.html", cats=cats, pick=keep)
+        date_h, date_err = picked_date(pick)
         if date_err:  # نتحقق قبل حفظ الملف حتى لا يبقى ملف يتيم على القرص
             flash(f"التاريخ: {date_err}", "error")
             return render_with_picker("upload.html", cats=cats, pick=keep)
-        ext = f.filename.rsplit(".", 1)[1].lower()
-        stored = f"{uuid.uuid4().hex}.{ext}"
-        path = os.path.join(app.config["UPLOAD_FOLDER"], stored)
-        f.save(path)
+        if pend:  # الملف حُلِّل قبل الحفظ: ننقله ونستعمل التحليل نفسه (لا نعيد استدعاء Gemini)
+            ext, original, a = pend["ext"], pend["original_name"], pend["analysis"]
+            stored = f"{pend['token']}.{ext}"
+            os.replace(os.path.join(_pending_dir(), stored), os.path.join(app.config["UPLOAD_FOLDER"], stored))
+            os.remove(os.path.join(_pending_dir(), pend["token"] + ".json"))
+        else:
+            ext, original = f.filename.rsplit(".", 1)[1].lower(), f.filename[:250]
+            stored = f"{uuid.uuid4().hex}.{ext}"
+            path = os.path.join(app.config["UPLOAD_FOLDER"], stored)
+            f.save(path)
+            a = analyze_document(path, ext, cats, request.form.get("use_ai") == "1")
+        if a["warn"]:
+            flash(a["warn"], "warn")
 
         title = request.form.get("title", "").strip()
         number = request.form.get("doc_number", "").strip()
-        date = ""  # النص الأصلي للتاريخ كما استخرجه الذكاء الاصطناعي (يُحفظ في doc_date للأرشيف فقط)
         cat_id = request.form.get("category_id", type=int)
         source = request.form.get("source", "").strip()
         desc = request.form.get("description", "").strip()
-        use_ai = request.form.get("use_ai") == "1"
-
-        text, summary, notes = "", "", []
-        if use_ai:
-            text = ai.extract_text(path, ext)
-            if text:
-                summary = ai.summarize(text)
-                fields = ai.extract_fields(text)
-                gem = ai.gemini_analyze(text, [c["name"] for c in cats])
-                date_numeric = gem["doc_date_numeric"] if gem else None
-                if gem:  # Gemini أدق؛ وإن فشل نبقى على النتائج المحلية
-                    summary = gem["summary"] or summary
-                    for k in ("title", "doc_number", "doc_date", "source"):
-                        fields[k] = gem[k] or fields[k]
-                    gcat = gem["category"]
-                    notes.append("Gemini")
-                elif ai.gemini_enabled():
-                    flash("تعذّر الاتصال بـ Gemini، استُخدم التحليل المحلي.", "warn")
-                    gcat = None
-                else:
-                    gcat = None
-                if not title and fields["title"]:
-                    title = fields["title"]; notes.append("العنوان")
-                if not number and fields["doc_number"]:
-                    number = fields["doc_number"]; notes.append("الرقم")
-                date = fields["doc_date"] or ""
-                if not date_h:  # القوائم فارغة: نعبّئ من الوثيقة (الميلادي يُحوَّل لهجري، والغامض يُترك)
-                    auto = hu.parse_any_date(date_numeric) or hu.parse_any_date(date)
-                    if auto and auto <= today:
-                        date_h = auto; notes.append("التاريخ")
-                if not source and fields["source"]:
-                    source = fields["source"][:150]; notes.append("الجهة")
-                if not cat_id:
-                    guess = gcat or ai.classify(text, [c["name"] for c in cats])
-                    cat = next((c for c in cats if c["name"] == guess), None)
-                    if cat:
-                        cat_id = cat["id"]; notes.append("التصنيف")
-            else:
-                flash("تعذّر استخراج نص من الملف، تأكد من وضوح الصورة.", "warn")
+        notes = list(a["notes"])
+        if not title and a["title"]:
+            title = a["title"]; notes.append("العنوان")
+        if not number and a["doc_number"]:
+            number = a["doc_number"]; notes.append("الرقم")
+        if not source and a["source"]:
+            source = a["source"]; notes.append("الجهة")
+        if not cat_id and a["category_id"]:
+            cat_id = a["category_id"]; notes.append("التصنيف")
+        # تاريخ الوثيقة: ما اختاره المستخدم، وإلا ما استُخرج تلقائياً. تفريغ الخانة لا يمسح المستخرج.
+        # (لا يُستعمل تاريخ الأرشفة created_at بديلاً أبداً)
+        auto_iso = a["date"]["iso"]
+        if date_h:
+            date_source = "auto" if date_h == auto_iso else "manual"
+        else:
+            date_h, date_source = auto_iso, ("auto" if auto_iso else None)
+        if date_source == "auto":
+            notes.append("التاريخ")
         if not title:
-            title = os.path.splitext(f.filename)[0][:200] or "وثيقة بدون عنوان"
+            title = os.path.splitext(original)[0][:200] or "وثيقة بدون عنوان"
+        raw_date = (a["date"]["raw"] or "")[:20]
 
         doc_id = db.execute(
-            "INSERT INTO documents (title, doc_number, doc_date, doc_date_h, category_id, source, description, "
-            "filename, original_name, ocr_text, search_text, summary, uploaded_by) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (title, number or None, date[:20] or None, date_h, cat_id or None, source or None, desc or None, stored,
-             f.filename[:250], text, ai.build_search_text(title, number, source, desc, text), summary or None,
-             g.user["id"]))
+            "INSERT INTO documents (title, doc_number, doc_date, doc_date_h, doc_date_source, category_id, source, "
+            "description, filename, original_name, ocr_text, search_text, summary, uploaded_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (title, number or None, raw_date or None, date_h, date_source, cat_id or None, source or None, desc or None,
+             stored, original, a["text"], ai.build_search_text(title, number, source, desc, a["text"]),
+             a["summary"] or None, g.user["id"]))
         msg = "تمت أرشفة الوثيقة بنجاح"
         if notes:
             msg += " — عبّأ الذكاء الاصطناعي: " + "، ".join(notes)
         flash(msg, "ok")
+        if not date_h:
+            flash(NEED_DATE_MSG, "warn")
         return redirect(url_for("view", doc_id=doc_id))
     return render_with_picker("upload.html", cats=cats, pick=keep)
 
@@ -384,8 +481,9 @@ def view(doc_id):
             e["changes"] = json.loads(e["changes"] or "[]")
         except ValueError:
             e["changes"] = []
+        e["system"] = any(c.get("source") == "backfill" for c in e["changes"])  # تعبئة السكربت، لا مستخدم
     # العرض للقراءة فقط: لا يغيّر updated_at
-    return render_template("view.html", d=d, is_pdf=(ext == "pdf"), orig_date=orig if show_orig else None, edits=edits)
+    return render_with_picker("view.html", d=d, is_pdf=(ext == "pdf"), orig_date=orig if show_orig else None, edits=edits)
 
 
 @app.route("/file/<int:doc_id>")
@@ -418,21 +516,71 @@ def edit(doc_id):
         if not changes:  # لا تغيير فعلي: لا نلمس updated_at ولا نسجّل شيئاً
             flash("لم تتغير أي بيانات.", "ok")
             return redirect(url_for("view", doc_id=doc_id))
-        now = hu.utc_now_str()
-        # التحديث والسجل معاً أو لا شيء. doc_date القديم لا يُلمس: يبقى أرشيفاً للنص الأصلي
-        with db.transaction():
-            db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date_h=%s, category_id=%s, source=%s, "
-                       "description=%s, summary=%s, search_text=%s, updated_at=%s, updated_by=%s WHERE id=%s",
-                       (new["title"], new["doc_number"], new["doc_date_h"], new["category_id"], new["source"],
-                        new["description"], new["summary"],
-                        ai.build_search_text(new["title"], new["doc_number"] or "", new["source"] or "",
-                                             new["description"] or "", d["ocr_text"] or ""),
-                        now, g.user["id"], doc_id))
-            db.execute("INSERT INTO document_edits (document_id, user_id, edited_at, changes) VALUES (%s,%s,%s,%s)",
-                       (doc_id, g.user["id"], now, json.dumps(changes, ensure_ascii=False)))
+        save_document_changes(d, new, changes)
         flash("تم حفظ التعديلات: " + "، ".join(c["label"] for c in changes), "ok")
         return redirect(url_for("view", doc_id=doc_id))
     return render_with_picker("edit.html", d=d, cats=cats, pick=d.get("doc_date_h") or "")
+
+
+def save_document_changes(d: dict, new: dict, changes: list[dict]):
+    """يحفظ تعديلاً فعلياً من المستخدم الحالي: التحديث + updated_at/by + صف في السجل، داخل معاملة واحدة.
+    إن تغيّر تاريخ الوثيقة فمصدره يصير manual (أو يُفرَّغ مع التاريخ). doc_date القديم لا يُلمس."""
+    date_changed = any(c["field"] == "doc_date_h" for c in changes)
+    source = ("manual" if new["doc_date_h"] else None) if date_changed else d.get("doc_date_source")
+    now = hu.utc_now_str()
+    with db.transaction():
+        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date_h=%s, doc_date_source=%s, category_id=%s, "
+                   "source=%s, description=%s, summary=%s, search_text=%s, updated_at=%s, updated_by=%s WHERE id=%s",
+                   (new["title"], new["doc_number"], new["doc_date_h"], source, new["category_id"], new["source"],
+                    new["description"], new["summary"],
+                    ai.build_search_text(new["title"], new["doc_number"] or "", new["source"] or "",
+                                         new["description"] or "", d["ocr_text"] or ""),
+                    now, g.user["id"], d["id"]))
+        db.execute("INSERT INTO document_edits (document_id, user_id, edited_at, changes) VALUES (%s,%s,%s,%s)",
+                   (d["id"], g.user["id"], now, json.dumps(changes, ensure_ascii=False)))
+
+
+def _current_values(d: dict) -> dict:
+    return {k: d.get(k) for k, _label, _short in EDIT_FIELDS}
+
+
+@app.route("/doc/<int:doc_id>/set-date", methods=["POST"])
+@login_required({"admin", "clerk"})
+def set_date(doc_id):
+    """حفظ تاريخ الوثيقة وحده (من صفحة الوثيقة أو صفحة «وثائق تحتاج تاريخاً») كتعديل عادي مسجَّل."""
+    d = get_doc(doc_id)
+    back = url_for("missing_dates") if request.form.get("next") == "missing" else url_for("view", doc_id=doc_id)
+    value = request.form.get("doc_date_h", "").strip()
+    if not value:
+        flash("اختر تاريخ الوثيقة من التقويم أولاً.", "error")
+        return redirect(back)
+    date_h, err = picked_date(value)
+    if err:
+        flash(f"التاريخ: {err}", "error")
+        return redirect(back)
+    new = _current_values(d)
+    new["doc_date_h"] = date_h
+    cats = {c["id"]: c["name"] for c in db.query("SELECT id, name FROM categories")}
+    changes = diff_document(d, new, cats)
+    if not changes:
+        flash("التاريخ محفوظ مسبقاً.", "ok")
+        return redirect(back)
+    save_document_changes(d, new, changes)
+    flash(f"تم حفظ تاريخ الوثيقة «{d['title']}»: {hu.format_hijri(date_h)}", "ok")
+    return redirect(back)
+
+
+@app.route("/missing-dates")
+@login_required({"admin", "clerk"})
+def missing_dates():
+    """الوثائق التي بلا تاريخ وثيقة، مع اقتراح من نصها المخزّن (لا يُحفظ إلا بضغط «حفظ»)."""
+    rows = db.query("SELECT id, title, created_at, ocr_text FROM documents WHERE doc_date_h IS NULL "
+                    "ORDER BY id DESC LIMIT 300")
+    for r in rows:
+        s = ai.pick_document_date(r.pop("ocr_text") or "")
+        r["suggest"] = s["iso"] if s["confidence"] in ("high", "medium") else None
+    total = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+    return render_with_picker("missing_dates.html", rows=rows, total=total)
 
 
 @app.route("/doc/<int:doc_id>/delete", methods=["POST"])

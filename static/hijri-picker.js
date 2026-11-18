@@ -324,5 +324,12 @@
   window.addEventListener("resize", function () { instances.forEach(function (o) { if (o.pop) o.place(); }); });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
-  window.HijriPicker = { init: init, instances: instances };  // للاختبار
+  // setValue: تعبئة خانة من الكود (مثل التاريخ المستخرج من الوثيقة قبل الحفظ). يتجاهل القيمة غير الصالحة.
+  function setValue(rootId, value) {
+    var p = instances.filter(function (o) { return o.root.id === rootId; })[0], v = parse(value);
+    if (!p || !valid(v) || cmp(v, TODAY) > 0) return false;
+    p.set(v);
+    return true;
+  }
+  window.HijriPicker = { init: init, instances: instances, setValue: setValue };
 })();

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, doc_number TEXT,
-  doc_date TEXT, doc_date_h TEXT, category_id INTEGER, source TEXT, description TEXT,
+  doc_date TEXT, doc_date_h TEXT, doc_date_source TEXT, category_id INTEGER, source TEXT, description TEXT,
   filename TEXT NOT NULL, original_name TEXT NOT NULL, ocr_text TEXT,
   search_text TEXT, summary TEXT, uploaded_by INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,

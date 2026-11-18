@@ -17,6 +17,12 @@
     <span class="muted">إجمالي الوثائق</span>
     <b>{{ total }}</b>
   </div>
+  {% if missing is not none %}
+  <a class="card stat" href="{{ url_for('missing_dates') }}" style="border-top:4px solid var(--amber)">
+    <span class="muted">وثائق تحتاج تاريخاً</span>
+    <b>{{ missing }}</b>
+  </a>
+  {% endif %}
 </div>
 
 <div class="dash">
@@ -50,7 +56,7 @@
     <tr><th>العنوان</th><th>التصنيف</th><th>تاريخ الوثيقة</th><th>تاريخ الأرشفة</th></tr>
     {% for d in recent %}
     <tr><td><a href="{{ url_for('view', doc_id=d.id) }}">{{ d.title }}</a></td>
-        <td>{{ d.category or '—' }}</td><td>{{ d.doc_date_h|hijri }}</td><td>{{ d.created_at|riyadh }}</td></tr>
+        <td>{{ d.category or '—' }}</td><td>{% if d.doc_date_h %}{{ d.doc_date_h|hijri }}{% else %}<span class="badge-missing">غير محدد</span>{% endif %}</td><td>{{ d.created_at|riyadh }}</td></tr>
     {% endfor %}
   </table>
 </div>

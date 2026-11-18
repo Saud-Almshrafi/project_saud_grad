@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_hijri.html" as hp %}
 {% block title %}{{ d.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -17,13 +18,27 @@
     <dl>
       <dt>التصنيف</dt><dd>{{ d.category or '—' }}</dd>
       <dt>رقم الوثيقة</dt><dd>{{ d.doc_number or '—' }}</dd>
-      {% if d.doc_date_h %}<dt>التاريخ</dt><dd>{{ d.doc_date_h|hijri }}
+      {# تاريخ الوثيقة وتاريخ الأرشفة معلومتان مختلفتان بعنوانين منفصلين #}
+      <dt>تاريخ الوثيقة</dt><dd>
+        {% if d.doc_date_h %}{{ d.doc_date_h|hijri }}
+          {% if d.doc_date_source in ('auto', 'backfill') %}<small class="muted">({{ 'مستخرج تلقائياً' if d.doc_date_source == 'auto' else 'تعبئة تلقائية' }})</small>{% endif %}
+        {% else %}<span class="badge-missing">غير محدد</span>{% endif %}
         {% if orig_date %}<br><small class="muted">النص الأصلي في الوثيقة: <bdi>{{ orig_date }}</bdi></small>{% endif %}</dd>
-      {% elif orig_date %}<dt>التاريخ</dt><dd><small class="muted">النص الأصلي في الوثيقة: <bdi>{{ orig_date }}</bdi></small></dd>{% endif %}
       <dt>الجهة</dt><dd>{{ d.source or '—' }}</dd>
       <dt>أُرشفت بواسطة</dt><dd>{{ d.uploader or '—' }}</dd>
       <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at|riyadh or '—' }}</dd>
     </dl>
+    {% if not d.doc_date_h and g.user.role in ('admin','clerk') %}
+    <form method="post" action="{{ url_for('set_date', doc_id=d.id) }}" class="need-date">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <p><b>⚠ لم نتمكن من تحديد تاريخ الوثيقة، أضِفه الآن ليظهر في البحث بالتاريخ.</b></p>
+      <div class="need-date-row">
+        {{ hp.picker("doc_date_h", "", optional=False, label="تاريخ الوثيقة") }}
+        <button class="btn">حفظ التاريخ</button>
+      </div>
+      <small class="muted">تاريخ الوثيقة هو تاريخ إصدارها المكتوب في ترويستها، وليس تاريخ أرشفتها.</small>
+    </form>
+    {% endif %}
     <div class="last-edit">
       {% if d.updated_at %}
         <b>آخر تعديل:</b> {{ d.updated_at|riyadh }} — بواسطة {{ d.updater or 'مستخدم محذوف' }}
@@ -37,12 +52,13 @@
       <ol>
         {% for e in edits %}
         <li>
-          <div class="edit-meta">{{ e.edited_at|riyadh }} — {{ e.editor or 'مستخدم محذوف' }}</div>
+          <div class="edit-meta">{{ e.edited_at|riyadh }} — {{ e.editor or ('النظام (تعبئة تلقائية)' if e.system else 'مستخدم محذوف') }}</div>
           <ul>
             {% for c in e.changes %}
             <li>{{ c.label }}:
               {% if c.edited %}<span class="muted">تم تعديله</span>
               {% else %}<bdi>{{ c.old or '—' }}</bdi> ← <bdi>{{ c.new or '—' }}</bdi>{% endif %}
+              {% if c.note %}<span class="muted">({{ c.note }})</span>{% endif %}
             </li>
             {% endfor %}
           </ul>
@@ -60,4 +76,5 @@
     {% else %}<img src="{{ url_for('file', doc_id=d.id) }}" alt="{{ d.title }}">{% endif %}
   </section>
 </div>
+{% if not d.doc_date_h and g.user.role in ('admin','clerk') %}{{ hp.script(HIJRI) }}{% endif %}
 {% endblock %}

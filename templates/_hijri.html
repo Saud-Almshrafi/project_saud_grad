@@ -5,8 +5,8 @@
      {{ hp.picker("date_from", v, role="from", pair="hdp-date_to") }}     ← زوج «من/إلى»
      {{ hp.script(HIJRI) }}                                              ← مرة واحدة في الصفحة
    القيمة تُرسل في input مخفي بنفس الاسم وبصيغة YYYY-MM-DD هجري، والخادم يتحقق نهائياً. #}
-{% macro picker(name, value="", optional=True, role="", pair="", label="التاريخ الهجري") %}
-<div class="hdp" id="hdp-{{ name }}" data-hdp{% if optional %} data-optional{% endif %}{% if role %} data-role="{{ role }}"{% endif %}{% if pair %} data-pair="{{ pair }}"{% endif %}>
+{% macro picker(name, value="", optional=True, role="", pair="", label="التاريخ الهجري", uid="") %}
+<div class="hdp" id="hdp-{{ uid or name }}" data-hdp{% if optional %} data-optional{% endif %}{% if role %} data-role="{{ role }}"{% endif %}{% if pair %} data-pair="{{ pair }}"{% endif %}>
   <input type="hidden" name="{{ name }}" value="{{ value or '' }}" data-value>
   <div class="hdp-field">
     <input type="text" class="hdp-text" readonly value="{{ value|hijri if value else '' }}" placeholder="اختر التاريخ"

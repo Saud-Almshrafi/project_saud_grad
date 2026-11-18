@@ -1,7 +1,7 @@
 import os, re, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 tmp = tempfile.mkdtemp()
-os.environ.update(DB_ENGINE="sqlite", SQLITE_PATH=os.path.join(tmp, "t.db"), SECRET_KEY="t")
+os.environ.update(DB_ENGINE="sqlite", SQLITE_PATH=os.path.join(tmp, "t.db"), SECRET_KEY="t", GEMINI_API_KEY="")  # بلا شبكة: Gemini بالمحاكاة فقط
 import app as A, db
 from werkzeug.security import generate_password_hash
 db.init_sqlite()
@@ -208,8 +208,10 @@ ok("calendar table sent to browser matches hijri-converter (month lengths + firs
 
 # --- الرفع
 c = client("clerk"); tok = csrf(c)
-def up(**kw):
-    data = {"csrf": tok, "file": (open(f"{S}/circular_leave.png", "rb"), "u.png"), **kw}
+from PIL import Image as _Img
+BLANK = os.path.join(tmp, "blank.png"); _Img.new("RGB", (600, 300), "white").save(BLANK)  # وثيقة بلا أي نص/تاريخ
+def up(_file=None, **kw):
+    data = {"csrf": tok, "file": (open(_file or f"{S}/circular_leave.png", "rb"), "u.png"), **kw}
     return c.post("/upload", data=data, content_type="multipart/form-data")
 def last_doc():
     with A.app.app_context(): return db.query("SELECT * FROM documents ORDER BY id DESC LIMIT 1", one=True)
@@ -220,8 +222,15 @@ assert 'name="doc_date"' not in up_html and 'type="hidden" name="doc_date_h" val
 assert 'name="doc_y"' not in up_html and "<select name=\"doc_" not in up_html and 'placeholder="اختر التاريخ"' in up_html
 ok("upload page: single calendar field, no old dropdowns")
 assert up(title="UP1", doc_date_h="1446-09-12").status_code == 302
-d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date"] is None and d["updated_at"] is None; ok("upload: calendar value saved (YYYY-MM-DD)")
-assert up(title="UP2").status_code == 302 and last_doc()["doc_date_h"] is None; ok("upload: date optional")
+d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date_source"] == "manual" and d["updated_at"] is None, d
+ok("upload: calendar value saved (YYYY-MM-DD), differs from extracted → manual")
+r = up(BLANK, title="UP2", follow_redirects=True) if False else None
+r = c.post("/upload", data={"csrf": tok, "title": "UP2", "file": (open(BLANK, "rb"), "b.png")}, content_type="multipart/form-data",
+           follow_redirects=True)
+d = last_doc(); t = r.get_data(as_text=True)
+assert d["title"] == "UP2" and d["doc_date_h"] is None and d["doc_date_source"] is None and d["created_at"]
+assert "لم نتمكن من تحديد تاريخ الوثيقة" in t and "/set-date" in t and "تاريخ الوثيقة</dt>" in t and "غير محدد" in t
+ok("upload without any date: saved NULL (created_at NOT used), redirected to view with alert + set-date form")
 before = n_docs()
 for bad, msg in [("1446", hu.ERR_INCOMPLETE), (H(*M29, 30), hu.ERR_INVALID), ("1446-13-01", hu.ERR_INVALID),
                  ("12/09/1446", hu.ERR_INVALID), (H(*TOMORROW), None), ("1399-01-01", hu.ERR_RANGE)]:
@@ -230,18 +239,19 @@ for bad, msg in [("1446", hu.ERR_INCOMPLETE), (H(*M29, 30), hu.ERR_INVALID), ("1
 assert n_docs() == before; ok("upload: invalid / future / partial rejected, nothing saved")
 # تعبئة تلقائية من استخراج الوثيقة (نحاكي الذكاء الاصطناعي)
 _ext, _gem = A.ai.extract_text, A.ai.gemini_analyze
-A.ai.extract_text = lambda p, e: "تعميم\nالرقم: 77\nالتاريخ: 12/03/2025 م\nالموضوع: اختبار التحويل من الميلادي"
+A.ai.extract_text = lambda p, e, **k: "تعميم\nالرقم: 77\nالتاريخ: 12/03/2025 م\nالموضوع: اختبار التحويل من الميلادي"
 A.ai.gemini_analyze = lambda t, c: None
 assert up(use_ai="1").status_code == 302
-d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date"] == "12/03/2025", (d["doc_date_h"], d["doc_date"])
+d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date"].startswith("12/03/2025"), (d["doc_date_h"], d["doc_date"])
+assert d["doc_date_source"] == "auto"
 ok("upload auto: Gregorian from document converted to Hijri")
 A.ai.gemini_analyze = lambda t, c: {"title": "G", "doc_number": None, "doc_date": "12 رمضان 1446هـ", "doc_date_numeric": "1446/09/12",
                                     "source": None, "category": None, "summary": None}
 assert up(use_ai="1").status_code == 302 and last_doc()["doc_date_h"] == "1446-09-12"; ok("upload auto: Gemini numeric date used")
-A.ai.extract_text = lambda p, e: "تعميم بلا أي تاريخ واضح في هذا النص الطويل نسبياً"
+A.ai.extract_text = lambda p, e, **k: "تعميم بلا أي تاريخ واضح في هذا النص الطويل نسبياً"
 A.ai.gemini_analyze = lambda t, c: None
 assert up(use_ai="1").status_code == 302 and last_doc()["doc_date_h"] is None; ok("upload auto: no date → empty")
-A.ai.extract_text = lambda p, e: "التاريخ: 1440/01/01 هـ\nالموضوع: المنتقي يتقدم على الاستخراج"
+A.ai.extract_text = lambda p, e, **k: "التاريخ: 1440/01/01 هـ\nالموضوع: المنتقي يتقدم على الاستخراج"
 assert up(use_ai="1", doc_date_h="1446-01-01").status_code == 302 and last_doc()["doc_date_h"] == "1446-01-01"
 ok("upload: picker wins over extracted date")
 A.ai.extract_text, A.ai.gemini_analyze = _ext, _gem
@@ -426,7 +436,7 @@ assert order(h, r) == ["UPM-LASTSEC", "UPM-NOHDATE", "UPM-EARLY", "UPM-LATE"], o
 ok("upload mode: full range, newest upload first")
 assert 'id="date-by-upload" name="date_by" value="upload" checked' in h and "من تاريخ الرفع" in h and "إلى تاريخ الرفع" in h
 assert 'name="date_from" value="1446-09-12"' in h and 'name="date_to" value="1446-09-14"' in h; ok("mode + both dates kept after search")
-assert "رُفعت: 12 رمضان 1446هـ" in h and "رُفعت: 13 رمضان 1446هـ" in h; ok("cards show 'رُفعت:' (Riyadh day, Hijri) in upload mode")
+assert "تاريخ الأرشفة: 12 رمضان 1446هـ" in h and "تاريخ الأرشفة: 13 رمضان 1446هـ" in h; ok("cards show archive date (Riyadh day, Hijri) under its own label")
 h, r = fu(date_from="1446-09-12", date_to="1446-09-12", date_by="upload"); assert r == ["UPM-LATE"], r
 h, r = fu(date_from="1446-09-13", date_to="1446-09-13", date_by="upload"); assert set(r) == {"UPM-EARLY", "UPM-NOHDATE"}, r
 ok("day boundary: 23:30 and 00:10 Riyadh land on their own day only")
@@ -437,13 +447,14 @@ h, r = fu(date_to="1446-09-12", date_by="upload"); assert set(r) == {"UPM-OLD", 
 h, r = fu(date_from="1445", date_to="1445", date_by="upload"); assert r == ["UPM-OLD"], r
 h, r = fu(date_from="1446-09", date_to="1446-09", date_by="upload"); assert set(r) == set(UPM) - {"UPM-OLD"}, r; ok("upload: year only / year+month")
 h, r = fu(date_from="1446-09-14", date_to="1446-09-12", date_by="upload")
-assert "يجب ألا يكون بعد" in h and set(r) == set(UPM) and "رُفعت:" not in h; ok("upload: from > to → error, filter not applied")
+assert "يجب ألا يكون بعد" in h and set(r) == set(UPM); ok("upload: from > to → error, filter not applied")
 h, r = fu(date_from=H(*TOMORROW), date_by="upload"); assert "flash error" in h and set(r) == set(UPM); ok("upload: future date rejected")
 h, r = fu(q="UPM-", cat=2, date_from="1446-09-12", date_to="1446-09-14", date_by="upload")
 assert set(r) == {"UPM-EARLY", "UPM-LASTSEC"}, r; ok("upload: + text search + category")
 h, r = fu(q="UPM-LATE", smart=1, date_from="1446-09-12", date_by="upload"); assert r == ["UPM-LATE"], r
 h, r = fu(q="UPM-LATE", smart=1, date_from="1446-09-13", date_by="upload"); assert r == [], r; ok("upload: + smart search")
-h, r = fu(date_from="1446-09-12", date_to="1446-09-14"); assert "بلا تاريخ،" in h and "رُفعت:" not in h
+h, r = fu(date_from="1446-09-12", date_to="1446-09-14"); assert "بلا تاريخ،" in h and "UPM-NOHDATE" not in h
+assert "تاريخ الوثيقة: <span class=\"badge-missing\">غير محدد</span>" in fu(date_by="upload")[0]
 h, r = fu(date_from="1446-09-12", date_to="1446-09-14", date_by="upload"); assert "بلا تاريخ" not in h
 ok("notice: shown in doc mode, hidden in upload mode (no NULL created_at)")
 with A.app.app_context():
@@ -451,7 +462,7 @@ with A.app.app_context():
 h, r = fu(date_from="1446-09-12", date_by="upload")
 assert "1 وثيقة في الأرشيف بلا تاريخ رفع" in h and "<h3>UPM-NULLCREATED</h3>" not in h; ok("NULL created_at → excluded + notice in upload mode")
 with A.app.app_context(): db.execute("DELETE FROM documents WHERE id=%s", (nid,))
-h, r = fu(date_by="upload"); assert set(r) == set(UPM) and "رُفعت:" not in h; ok("upload mode without dates: no filter, cards unchanged")
+h, r = fu(date_by="upload"); assert set(r) == set(UPM); ok("upload mode without dates: no filter")
 h = v.get("/?" + urlencode({"date_from": "1445", "date_to": "1446"})).get_data(as_text=True)
 hd = [t for t in ["HD-EEE", "HD-DDD", "HD-CCC", "HD-BBB", "HD-AAA"] if f"<h3>{t}</h3>" in h]
 assert sorted(hd, key=lambda t: h.index(f"<h3>{t}</h3>")) == ["HD-EEE", "HD-DDD", "HD-CCC", "HD-BBB", "HD-AAA"]; ok("doc mode with filter: newest document date first")
@@ -470,4 +481,208 @@ oi.close()
 mc = sqlite3.connect(os.environ["SQLITE_PATH"])
 assert migrate_created_index.migrate(mc, "sqlite")["added_index"] is False; mc.close()  # المخطط الجديد فيه الفهرس
 ok("migration (created_at index): idempotent, no data touched")
+
+# ===================================================== 14) التقاط تاريخ الوثيقة
+import ai as AI
+_g = lambda y, m, d: (lambda h: hu.to_iso(h.year, h.month, h.day))(Gregorian(y, m, d).to_hijri())
+# --- دالة الاستخراج (البديل المحلي)
+cases = [
+    ("تعميم\nالرقم: 4712345\nالتاريخ: 1447/05/12 هـ\nالموضوع: ضوابط", "1447-05-12"),
+    ("التاريخ: 12/05/1447هـ\nنص", "1447-05-12"),
+    ("التاريخ: ١٤٤٧/٠٥/١٢هـ\nالموضوع: س", "1447-05-12"),
+    ("التاريخ: ۱۴۴۷-۰۵-۱۲\nنص", "1447-05-12"),
+    ("المؤرخ في 1447.05.12هـ\nنص", "1447-05-12"),
+    ("خطاب\nالتاريخ: 12 ربيع الأول 1447هـ\nالموضوع: اختبار", "1447-03-12"),
+    ("التاريخ: ١٢ جمادى الآخرة ١٤٤٦هـ", "1446-06-12"),
+    ("التاريخ: 2025/11/03م\nنص", _g(2025, 11, 3)),
+    ("التاريخ: 03/11/2025\nنص", _g(2025, 11, 3)),
+    ("التاريخ: 1447/05/12هـ الموافق 2025/11/04م\nنص", "1447-05-12"),               # الاثنان معاً → الهجري
+    ("التاريخ: 1447/06/01هـ\nإشارة إلى خطابكم رقم 55 بتاريخ 1446/02/10هـ", "1447-06-01"),  # الإشارة لا تُختار
+    ("التاريخ: 1447/05/12هـ\n" + "سطر\n" * 6 + "على أن يتم التقديم قبل 1447/06/20هـ", "1447-05-12"),  # موعد في المتن
+]
+for txt, exp in cases:
+    r = AI.pick_document_date(txt)
+    assert r["iso"] == exp and r["confidence"] == "high", (txt, r)
+assert AI.pick_document_date("وزارة التعليم\n1447/05/12\nالموضوع: س")["confidence"] == "medium"
+for txt, reason in [(f"التاريخ: {TY + 1}/01/01هـ", "future"), ("التاريخ: 1447/05/12هـ\nالتاريخ: 1447/06/01هـ", "ambiguous"),
+                    ("نص\n" * 7 + "إشارة إلى خطابكم بتاريخ 1446/02/10هـ", "reference_only"), ("نص بلا أي تاريخ", "no_date"),
+                    ("التاريخ: 12/05/47", "no_date"), ("التاريخ: 12 جمادى 1447", "no_date"), ("", "no_date"),
+                    ("وزارة\n1447/05/12\n1447/06/01", "ambiguous")]:
+    r = AI.pick_document_date(txt)
+    assert r["iso"] is None and r["reason"] == reason, (txt, r)
+ok("date extraction (regex fallback): formats, digits, month names, Gregorian→Hijri, both→Hijri, reject future/ambiguous/references")
+# --- Gemini (بالمحاكاة) أولاً ثم البديل
+E = AI.extract_document_date
+assert E("x", {"doc_date": "12 جمادى الأولى 1447هـ", "doc_date_numeric": None, "doc_date_calendar": "hijri"})["iso"] == "1447-05-12"
+assert E("x", {"doc_date": "3/11/2025", "doc_date_numeric": "2025/11/03", "doc_date_calendar": "gregorian"})["iso"] == _g(2025, 11, 3)
+r = E("التاريخ: 1447/05/12هـ", {"doc_date": None, "doc_date_numeric": None}); assert r["iso"] == "1447-05-12" and r["method"] == "regex"
+r = E("التاريخ: 1447/05/12هـ", {"doc_date": f"{TY + 1}/01/01هـ", "doc_date_numeric": f"{TY + 1}/01/01"}); assert r["method"] == "regex" and r["iso"] == "1447-05-12"
+r = E("نص", {"doc_date": "1447/05/12", "doc_date_numeric": "2025/11/03", "doc_date_calendar": "hijri"})  # الرقمي يناقض التقويم → نأخذ النص
+assert r["iso"] == "1447-05-12" and r["method"] == "gemini"
+assert E("نص بلا تاريخ", None)["iso"] is None
+_call, _key = AI._gemini_call, os.environ.get("GEMINI_API_KEY")
+os.environ["GEMINI_API_KEY"] = "test-key"
+AI._gemini_call = lambda parts, **k: _json.dumps({"title": "ع", "document_date": {"raw": "12 ربيع الأول 1447هـ", "calendar": "hijri", "numeric": "1447/03/12"}})
+ga = AI.gemini_analyze("نص الوثيقة " * 5, ["تعميم"])
+assert ga["doc_date"] == "12 ربيع الأول 1447هـ" and ga["doc_date_numeric"] == "1447/03/12" and ga["doc_date_calendar"] == "hijri"
+AI._gemini_call = lambda parts, **k: _json.dumps({"title": "ع", "document_date": None})
+assert AI.gemini_analyze("نص الوثيقة " * 5, [])["doc_date"] is None
+AI._gemini_call = _call; os.environ["GEMINI_API_KEY"] = _key or ""
+ok("Gemini (mocked): structured document_date parsed; validated; falls back to regex")
+
+# --- الرفع: السبب الجذري ومسار ما قبل الحفظ
+c = client("clerk"); tok = csrf(c)
+_ext, _gem = A.ai.extract_text, A.ai.gemini_analyze
+A.ai.extract_text = lambda p, e, **k: "تعميم\nالرقم: 4712345\nالتاريخ: 1447/05/12 هـ\nالموضوع: ضوابط الإجازات"
+A.ai.gemini_analyze = lambda t, cs: {"title": "x", "doc_number": None, "doc_date": "12 جمادى الأولى 1447هـ", "doc_date_numeric": None,
+                                     "doc_date_calendar": "hijri", "source": None, "category": None, "summary": "s"}
+assert up(use_ai="1").status_code == 302 and last_doc()["doc_date_h"] == "1447-05-12" and last_doc()["doc_date_source"] == "auto"
+A.ai.gemini_analyze = lambda t, cs: {"title": "x", "doc_number": None, "doc_date": "تاريخ غير مفهوم", "doc_date_numeric": None,
+                                     "doc_date_calendar": None, "source": None, "category": None, "summary": "s"}
+assert up(use_ai="1").status_code == 302 and last_doc()["doc_date_h"] == "1447-05-12"  # Gemini بلا تاريخ صالح → البديل المحلي
+A.ai.extract_text, A.ai.gemini_analyze = _ext, _gem
+ok("root cause fixed: Gemini date in words / unusable no longer wipes the date found locally")
+A.ai.gemini_analyze = lambda *a: (_ for _ in ()).throw(AssertionError("Gemini must not be called"))
+assert up().status_code == 302
+d = last_doc(); assert d["doc_date_h"] == "1447-05-12" and d["doc_date_source"] == "auto" and not d["ocr_text"]
+A.ai.gemini_analyze = _gem
+ok("AI option unticked: date still extracted locally (no Gemini, text not stored)")
+
+def analyze(cl, tk, fname, **kw):
+    return cl.post("/upload/analyze", data={"csrf": tk, "file": (open(fname, "rb"), "a.png"), **kw}, content_type="multipart/form-data")
+r = analyze(c, tok, f"{S}/circular_leave.png"); j = r.get_json()
+assert r.status_code == 200 and j["doc_date_h"] == "1447-05-12" and j["doc_date_text"] == "12 جمادى الأولى 1447هـ" and re.fullmatch(r"[0-9a-f]{32}", j["token"])
+pend = os.path.join(tmp, "pending"); assert os.path.exists(os.path.join(pend, j["token"] + ".png"))
+before = n_docs()
+r = c.post("/upload", data={"csrf": tok, "pending": j["token"], "doc_date_h": j["doc_date_h"], "title": "PEND1"})  # بلا ملف
+d = last_doc(); assert r.status_code == 302 and n_docs() == before + 1 and d["title"] == "PEND1"
+assert d["doc_date_h"] == "1447-05-12" and d["doc_date_source"] == "auto" and os.path.exists(os.path.join(tmp, d["filename"]))
+assert not os.path.exists(os.path.join(pend, j["token"] + ".png")) and not os.path.exists(os.path.join(pend, j["token"] + ".json"))
+ok("analyze before save: calendar prefilled value saved as auto, pending file moved")
+j = analyze(c, tok, f"{S}/circular_leave.png").get_json()
+c.post("/upload", data={"csrf": tok, "pending": j["token"], "doc_date_h": "1447-05-20", "title": "PEND2"})
+assert last_doc()["doc_date_h"] == "1447-05-20" and last_doc()["doc_date_source"] == "manual"; ok("user changes prefilled date → manual")
+j = analyze(c, tok, f"{S}/circular_leave.png").get_json()
+c.post("/upload", data={"csrf": tok, "pending": j["token"], "doc_date_h": "", "title": "PEND3"})
+assert last_doc()["doc_date_h"] == "1447-05-12" and last_doc()["doc_date_source"] == "auto"; ok("clearing the field does not wipe the extracted date")
+j = analyze(c, tok, BLANK).get_json(); assert j["doc_date_h"] is None and j["token"]
+cl2 = client("admin"); tk2 = csrf(cl2); before = n_docs()
+r = cl2.post("/upload", data={"csrf": tk2, "pending": j["token"], "title": "STEAL"})
+assert r.status_code == 200 and "اختر ملفاً" in r.get_data(as_text=True) and n_docs() == before
+r = c.post("/upload", data={"csrf": tok, "pending": "../../app", "title": "X"}); assert "اختر ملفاً" in r.get_data(as_text=True)
+assert client("viewer").post("/upload/analyze", data={}).status_code in (400, 403)
+assert c.post("/upload/analyze", data={"file": (open(BLANK, "rb"), "b.png")}, content_type="multipart/form-data").status_code == 400
+ok("pending token: only same user, validated format, CSRF + edit permission required")
+
+# --- set-date
+with A.app.app_context():
+    sd = db.execute("INSERT INTO documents (title, filename, original_name, created_at) VALUES (%s,%s,%s,%s)",
+                    ("SD-DOC", "x.png", "x.png", "2025-03-12 09:00:00"))
+vw = c.get(f"/doc/{sd}").get_data(as_text=True)
+assert "لم نتمكن من تحديد تاريخ الوثيقة" in vw and f"/doc/{sd}/set-date" in vw and "badge-missing" in vw
+assert "/set-date" not in client("viewer").get(f"/doc/{sd}").get_data(as_text=True)
+assert client("viewer").post(f"/doc/{sd}/set-date", data={"csrf": csrf(client('viewer'))}).status_code in (400, 403)
+vv = client("viewer"); assert vv.post(f"/doc/{sd}/set-date", data={"csrf": csrf(vv), "doc_date_h": "1446-01-01"}).status_code == 403
+r = c.post(f"/doc/{sd}/set-date", data={"csrf": tok, "doc_date_h": ""}, follow_redirects=True)
+assert "اختر تاريخ الوثيقة" in r.get_data(as_text=True)
+for bad in (H(*TOMORROW), "1446-13-01", H(*M29, 30)):
+    r = c.post(f"/doc/{sd}/set-date", data={"csrf": tok, "doc_date_h": bad}, follow_redirects=True)
+    assert "flash error" in r.get_data(as_text=True), bad
+assert doc_row(sd)["doc_date_h"] is None and doc_row(sd)["updated_at"] is None and edits_of(sd) == []
+assert c.post(f"/doc/{sd}/set-date", data={"csrf": tok, "doc_date_h": "1446-03-05"}).headers["Location"].endswith(f"/doc/{sd}")
+row = doc_row(sd); logs = edits_of(sd)
+with A.app.app_context(): clerk_id = db.query("SELECT id FROM users WHERE username='clerk'", one=True)["id"]
+assert row["doc_date_h"] == "1446-03-05" and row["doc_date_source"] == "manual" and row["updated_at"] and row["updated_by"] == clerk_id
+assert len(logs) == 1 and _json.loads(logs[0]["changes"]) == [{"field": "doc_date_h", "label": "التاريخ", "old": None, "new": "5 ربيع الأول 1446هـ"}]
+assert "لم نتمكن" not in c.get(f"/doc/{sd}").get_data(as_text=True)
+ok("set-date: permissions, required, future/invalid rejected, saved as manual + logged + updated_at/by")
+assert c.post(f"/doc/{sd}/edit", data={"csrf": tok, "title": "SD-DOC2", "doc_date_h": "1446-03-05"}).status_code == 302
+assert doc_row(sd)["doc_date_source"] == "manual"
+with A.app.app_context(): db.execute("UPDATE documents SET doc_date_source='auto' WHERE id=%s", (sd,))
+assert c.post(f"/doc/{sd}/edit", data={"csrf": tok, "title": "SD-DOC3", "doc_date_h": "1446-03-05"}).status_code == 302
+assert doc_row(sd)["doc_date_source"] == "auto"   # العنوان فقط تغيّر → المصدر يبقى
+assert c.post(f"/doc/{sd}/edit", data={"csrf": tok, "title": "SD-DOC3", "doc_date_h": "1446-03-06"}).status_code == 302
+assert doc_row(sd)["doc_date_source"] == "manual"; ok("edit: changing the date marks source manual; other edits keep it")
+
+# --- صفحة «وثائق تحتاج تاريخاً» + الروابط والأعداد
+with A.app.app_context():
+    sug = db.execute("INSERT INTO documents (title, filename, original_name, ocr_text) VALUES (%s,%s,%s,%s)",
+                     ("SUG-DOC", "x.png", "x.png", "خطاب\nالتاريخ: 1446/04/07هـ\nالموضوع: اقتراح"))
+    nos = db.execute("INSERT INTO documents (title, filename, original_name, ocr_text) VALUES (%s,%s,%s,%s)",
+                     ("NOSUG-DOC", "x.png", "x.png", "نص بلا تاريخ"))
+    n_missing = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+assert client("viewer").get("/missing-dates").status_code == 403
+mp = c.get("/missing-dates").get_data(as_text=True)
+assert f"وثائق تحتاج تاريخاً <span class=\"count\">{n_missing}</span>" in mp and ">SUG-DOC<" in mp and ">NOSUG-DOC<" in mp
+assert 'id="hdp-d%d"' % sug in mp and 'type="hidden" name="doc_date_h" value="1446-04-07"' in mp and "مقترح" in mp
+assert doc_row(sug)["doc_date_h"] is None; ok("missing-dates page: lists NULL docs, suggestion prefilled + marked, not saved until submit")
+r = c.post(f"/doc/{sug}/set-date", data={"csrf": tok, "doc_date_h": "1446-04-07", "next": "missing"})
+assert r.headers["Location"].endswith("/missing-dates") and doc_row(sug)["doc_date_h"] == "1446-04-07"
+assert ">SUG-DOC<" not in c.get("/missing-dates").get_data(as_text=True); ok("saving from the page returns to it; row disappears")
+hp_ = c.get("/").get_data(as_text=True)
+assert f"وثائق تحتاج تاريخاً ({n_missing - 1})" in hp_ and "/missing-dates" in hp_
+assert "/missing-dates" not in client("viewer").get("/").get_data(as_text=True)
+dash = c.get("/dashboard").get_data(as_text=True); assert "وثائق تحتاج تاريخاً" in dash and f"<b>{n_missing - 1}</b>" in dash
+nt = c.get("/?date_from=1446").get_data(as_text=True); assert 'href="/missing-dates">يوجد' in nt
+ok("links + counts on index, dashboard; doc-mode notice links to the page (editors only)")
+
+# --- سكربت التعبئة
+import backfill_doc_dates as BF
+with A.app.app_context():
+    def addb(title, text, h=None):
+        return db.execute("INSERT INTO documents (title, filename, original_name, ocr_text, doc_date_h) VALUES (%s,%s,%s,%s,%s)",
+                          (title, "x.png", "x.png", text, h))
+    b_ok = addb("BF-OK", "قرار\nالتاريخ: 1446/03/05هـ\nالموضوع: تعبئة")
+    b_amb = addb("BF-AMB", "التاريخ: 1446/03/05هـ\nالتاريخ: 1446/04/01هـ")
+    b_med = addb("BF-MED", "وزارة\n1446/03/05\nبلا كلمة")
+    b_ref = addb("BF-REF", "نص\n" * 7 + "إشارة إلى خطابكم بتاريخ 1446/02/10هـ")
+    b_none = addb("BF-NOTEXT", None)
+    b_has = addb("BF-HAS", "التاريخ: 1446/09/09هـ", "1440-01-01")
+def nb():
+    with A.app.app_context(): return db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+conn = sqlite3.connect(os.environ["SQLITE_PATH"]); conn.execute("PRAGMA foreign_keys = ON")
+nlog = lambda: conn.execute("SELECT COUNT(*) FROM document_edits").fetchone()[0]
+n0, l0 = nb(), nlog()
+A.ai.gemini_analyze = lambda *a: (_ for _ in ()).throw(AssertionError("Gemini must not be called without --use-ai"))
+rep = BF.backfill(conn, "sqlite")
+ids = {i for i, *_ in rep["filled"]}; left = dict(rep["left"])
+assert b_ok in ids and not {b_amb, b_med, b_ref, b_none, b_has} & ids, rep
+assert left[b_amb] == "ambiguous" and left[b_med] == "single_in_header" and left[b_ref] == "reference_only" and left[b_none] == "no_text"
+assert nb() == n0 and nlog() == l0 and doc_row(b_ok)["doc_date_h"] is None; ok("backfill dry-run: reports, writes nothing, no Gemini")
+h_before = fu(date_from="1446-03-05", date_to="1446-03-05")[0]
+rep = BF.backfill(conn, "sqlite", apply=True)
+row = doc_row(b_ok); lg = edits_of(b_ok)
+assert row["doc_date_h"] == "1446-03-05" and row["doc_date_source"] == "backfill" and row["updated_at"] is None and row["updated_by"] is None
+assert len(lg) == 1 and lg[0]["user_id"] is None and _json.loads(lg[0]["changes"])[0]["note"] == "تعبئة تلقائية لتاريخ الوثيقة"
+assert doc_row(b_has)["doc_date_h"] == "1440-01-01" and doc_row(b_amb)["doc_date_h"] is None and nb() == n0 - len(rep["filled"])
+ok("backfill --apply: fills only high-confidence, source=backfill, logged without user, updated_at untouched, never overwrites")
+rep2 = BF.backfill(conn, "sqlite", apply=True)
+assert rep2["filled"] == [] and nlog() == l0 + len(rep["filled"]); ok("backfill idempotent (second run changes nothing)")
+vw = c.get(f"/doc/{b_ok}").get_data(as_text=True)
+assert "النظام (تعبئة تلقائية)" in vw and "(تعبئة تلقائية)" in vw and "مستخدم محذوف" not in vw; ok("view: backfill shown as system, not as deleted user")
+vv = client("viewer"); hv = vv.get("/?" + urlencode({"date_from": "1446-03-05", "date_to": "1446-03-05"})).get_data(as_text=True)
+assert "<h3>BF-OK</h3>" in hv and "<h3>BF-OK</h3>" not in h_before
+n_before = int(re.search(r"يوجد (\d+) وثيقة في الأرشيف بلا تاريخ", h_before).group(1))
+n_after = int(re.search(r"يوجد (\d+) وثيقة في الأرشيف بلا تاريخ", hv).group(1))
+assert n_after == n_before - len(rep["filled"]); ok("search by document date now finds backfilled docs; excluded count drops")
+A.ai.gemini_analyze = lambda t, cs: {"doc_date": "1446/04/01هـ", "doc_date_numeric": "1446/04/01", "doc_date_calendar": "hijri"}
+rep3 = BF.backfill(conn, "sqlite", apply=False, use_ai=True)
+assert (b_amb, "1446-04-01", "gemini") in rep3["filled"]; ok("backfill --use-ai uses Gemini (mocked) only when asked")
+A.ai.gemini_analyze = _gem
+import io, contextlib
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf): BF.main([])
+out = buf.getvalue(); assert "تجربة فقط" in out and "تُركت للصفحة اليدوية" in out and str(b_amb) in out; ok("backfill CLI: dry-run by default, report with left IDs")
+conn.close()
+
+# --- ترحيل doc_date_source + المبدأ: لا تعبئة من created_at
+import migrate_doc_date_source as MS
+os_ = sqlite3.connect(os.path.join(tmp, "old_src.db")); os_.executescript("CREATE TABLE documents (id INTEGER PRIMARY KEY, doc_date_h TEXT); INSERT INTO documents VALUES (1,'1446-01-01');")
+assert MS.migrate(os_, "sqlite") == {"added_column": True} and MS.migrate(os_, "sqlite") == {"added_column": False}
+assert os_.execute("SELECT id, doc_date_h, doc_date_source FROM documents").fetchall() == [(1, "1446-01-01", None)]; os_.close()
+ok("migration (doc_date_source): idempotent, existing rows untouched")
+for fn in ("app.py", "ai.py", "hijri_utils.py", "backfill_doc_dates.py", "migrate_hijri.py", "migrate_doc_date_source.py"):
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), fn), encoding="utf-8").read()
+    assert not re.search(r"doc_date_h\s*=\s*[^,\n]*created_at|created_at[^\n]*AS\s+doc_date", src), fn
+ok("principle: no code fills/labels doc date from created_at")
 print("ALL TESTS PASSED")

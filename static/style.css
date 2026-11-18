@@ -117,6 +117,26 @@ a.stat:hover{transform:translateY(-3px);transition:.15s}
   .hdp-pop,.hdp-pop.hdp-up{position:fixed;top:auto;bottom:8px;left:8px;right:8px !important;width:auto;max-height:85vh;overflow:auto;z-index:1001}
   .hdp-backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000}
 }
+/* ---- تاريخ الوثيقة: شارة «غير محدد»، التنبيه في صفحة الوثيقة، صفحة «وثائق تحتاج تاريخاً» ---- */
+.badge-missing{display:inline-block;background:#fff5df;color:#8a5a00;border:1px solid #e9c46a;border-radius:99px;padding:0 .6rem;font-size:.8rem;font-weight:600}
+.meta.dates{display:flex;flex-wrap:wrap;gap:.2rem 1rem;margin-top:.2rem}
+.need-date{background:#fff9ea;border:1px solid #e9c46a;border-radius:12px;padding:.7rem .9rem;margin:0 0 .9rem}
+.need-date p{margin:0 0 .5rem;color:#7a5410}
+.need-date-row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.need-date-row .hdp{flex:1;min-width:14rem}
+.need-date small{display:block;margin-top:.4rem}
+.need-date-link{border-color:var(--amber);color:#8a5a00}
+.auto-filled,.hdp.auto-filled .hdp-text{background:#f3faf6}
+.analyze-status{margin:-.4rem 0 .8rem}
+.table-wrap{overflow-x:auto}
+table.missing td{vertical-align:middle}
+.row-date{display:flex;align-items:center;gap:.5rem;margin:0}.row-date .hdp{flex:1;min-width:13rem}
+.tag.suggest{background:#fff5df;color:#8a5a00;white-space:nowrap}
+@media(max-width:600px){
+  table.missing,table.missing tbody,table.missing tr,table.missing td{display:block;width:100%}
+  table.missing tr:first-child{display:none}
+  table.missing tr{border-bottom:1px solid var(--bd);padding:.5rem 0}
+  table.missing td{border:0;padding:.2rem 0}
+}
 /* ---- آخر تعديل وسجل التعديلات (view.html) ---- */
 .last-edit{background:#f6f8f7;border-radius:10px;padding:.6rem .8rem;margin:0 0 .8rem;font-size:.9rem}
 .edit-log{margin-bottom:1rem}.edit-log summary{cursor:pointer;color:var(--g);font-weight:600}

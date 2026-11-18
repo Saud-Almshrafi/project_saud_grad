@@ -3,11 +3,14 @@
 {% block title %}أرشفة وثيقة{% endblock %}
 {% block content %}
 <div class="page-head"><h1>أرشفة وثيقة جديدة</h1></div>
-<form method="post" enctype="multipart/form-data" class="card form">
+<form method="post" enctype="multipart/form-data" class="card form" id="upload-form"
+      data-analyze="{{ url_for('upload_analyze') }}">
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="pending" value="">
   <label>الملف (PDF أو صورة ممسوحة)
     <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" required>
   </label>
+  <p class="analyze-status muted small" aria-live="polite" hidden></p>
   <label class="ai-box"><input type="checkbox" name="use_ai" value="1" checked>
     <span>🤖 <b>استخدم الذكاء الاصطناعي</b><br>
     <small>يقرأ النص (OCR) ويلخّصه ويقترح العنوان والرقم والتاريخ والتصنيف للحقول الفارغة أدناه.</small></span>
@@ -25,12 +28,64 @@
     <label>الجهة المصدرة<input name="source"></label>
   </div>
   <div class="field">
-    <span class="field-label">التاريخ الهجري (اختياري)</span>
-    {{ hp.picker("doc_date_h", pick) }}
-    <small class="muted">اتركه فارغاً ليُستخرج تلقائياً من الوثيقة (والتاريخ الميلادي يُحوَّل إلى هجري).</small>
+    <span class="field-label">تاريخ الوثيقة (هجري)</span>
+    {{ hp.picker("doc_date_h", pick, label="تاريخ الوثيقة") }}
+    <small class="muted date-hint">يُستخرج تلقائياً من الوثيقة بعد اختيار الملف (والتاريخ الميلادي يُحوَّل إلى هجري)، ويمكنك تغييره.
+      إن تركته فارغاً يُستعمل المستخرج. هذا تاريخ الوثيقة نفسها، أما تاريخ الأرشفة فيُسجَّل تلقائياً.</small>
   </div>
   <label>ملاحظات<textarea name="description" rows="3"></textarea></label>
   <button class="btn">حفظ وأرشفة</button>
 </form>
 {{ hp.script(HIJRI) }}
+<script>
+/* تحليل الملف فور اختياره لتعبئة النموذج قبل الحفظ (ومنه تقويم تاريخ الوثيقة).
+   تحسين فقط: بدون JavaScript يُحلَّل الملف عند الحفظ كما كان. */
+(function () {
+  var form = document.getElementById("upload-form");
+  if (!form || !window.fetch || !window.FormData) return;
+  var file = form.querySelector('input[name="file"]'), token = form.querySelector('input[name="pending"]');
+  var ai = form.querySelector('input[name="use_ai"]'), status = form.querySelector(".analyze-status");
+  var seq = 0;
+  function say(msg) { status.hidden = !msg; status.textContent = msg || ""; }
+  function fill(name, value) {
+    var el = form.querySelector('[name="' + name + '"]');
+    if (el && value != null && value !== "" && !el.value) { el.value = value; el.classList.add("auto-filled"); }
+  }
+  function analyze() {
+    token.value = "";
+    if (!file.files || !file.files.length) { say(""); return; }
+    var my = ++seq, fd = new FormData();
+    fd.append("csrf", form.querySelector('input[name="csrf"]').value);
+    fd.append("file", file.files[0]);
+    if (ai && ai.checked) fd.append("use_ai", "1");
+    say("⏳ جارٍ قراءة الوثيقة واستخراج تاريخها…");
+    fetch(form.getAttribute("data-analyze"), { method: "POST", body: fd, credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (my !== seq) return;                      // اختار ملفاً آخر أثناء التحليل
+        if (!res.ok || !res.j.token) { say(res.j.error || "تعذّر تحليل الملف مسبقاً، سيُحلَّل عند الحفظ."); return; }
+        var j = res.j;
+        token.value = j.token;
+        fill("title", j.title); fill("doc_number", j.doc_number); fill("source", j.source);
+        fill("category_id", j.category_id != null ? String(j.category_id) : "");
+        var dateBox = document.getElementById("hdp-doc_date_h");
+        if (j.doc_date_h && window.HijriPicker && !dateBox.querySelector("[data-value]").value) {
+          HijriPicker.setValue("hdp-doc_date_h", j.doc_date_h);
+          dateBox.classList.add("auto-filled");
+          say("✓ استُخرج تاريخ الوثيقة: " + j.doc_date_text + " — يمكنك تغييره قبل الحفظ." + (j.warn ? " (" + j.warn + ")" : ""));
+        } else if (!j.doc_date_h) {
+          say("⚠ لم نتمكن من تحديد تاريخ الوثيقة تلقائياً، اختره من التقويم أو أضِفه بعد الحفظ." + (j.warn ? " (" + j.warn + ")" : ""));
+        } else {
+          say("✓ حُلِّلت الوثيقة." + (j.warn ? " (" + j.warn + ")" : ""));
+        }
+      })
+      .catch(function () { if (my === seq) say("تعذّر تحليل الملف مسبقاً، سيُحلَّل عند الحفظ."); });
+  }
+  file.addEventListener("change", analyze);
+  if (ai) ai.addEventListener("change", function () { if (file.files && file.files.length) analyze(); });
+  form.addEventListener("submit", function () {
+    if (token.value) { file.required = false; file.disabled = true; }  // الملف محفوظ مؤقتاً في الخادم: لا نرفعه مرتين
+  });
+})();
+</script>
 {% endblock %}
