@@ -77,7 +77,7 @@ c2 = A.app.test_client(); r = c2.post("/login?next=//evil.com", data={"username"
 assert "evil.com" not in r.headers["Location"]; ok("no open redirect")
 # ===================================================== 11) التاريخ الهجري
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 import hijri_utils as hu, migrate_hijri
 from hijri_converter import Gregorian
@@ -156,37 +156,55 @@ with A.app.app_context():
     n_nodate = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
 ALL = ["HD-AAA", "HD-BBB", "HD-CCC", "HD-DDD", "HD-EEE", "HD-NNN"]
 v = client("viewer")
+H = lambda y, m=None, d=None: str(y) + (f"-{m:02d}" if m else "") + (f"-{d:02d}" if d else "")
 
 def found(**kw):
     h = v.get("/?" + urlencode(kw)).get_data(as_text=True)
     return h, [t for t in ALL if f"<h3>{t}</h3>" in h]
 
-h, r = found(from_y=1445, from_m=6, from_d=1, to_y=1445, to_m=12, to_d=hu.month_length(1445, 12))
+h, r = found(date_from=H(1445, 6, 1), date_to=H(1445, 12, hu.month_length(1445, 12)))
 assert r == ["HD-BBB", "HD-CCC"], r; ok("range: full (inclusive both ends)")
-assert '<option value="1445" selected>' in h and 'name="from_m"' in h; ok("selections kept after search")
+assert 'name="date_from" value="1445-06-01"' in h and 'value="1 جمادى الأولى 1445هـ"' not in h
+assert 'value="1 جمادى الآخرة 1445هـ"' in h; ok("selections kept after search (hidden ISO + readable text)")
 assert f"{n_nodate} وثيقة في الأرشيف بلا تاريخ" in h; ok("notice: docs without date excluded")
-h, r = found(from_y=1446, from_m=1, from_d=1); assert r == ["HD-DDD", "HD-EEE"], r; ok("from only")
-h, r = found(to_y=1445, to_m=1, to_d=10); assert r == ["HD-AAA"], r; ok("to only")
-h, r = found(from_y=1445, to_y=1445); assert r == ["HD-AAA", "HD-BBB", "HD-CCC"], r; ok("year only (all of 1445)")
-h, r = found(from_y=1446); assert r == ["HD-DDD", "HD-EEE"], r
-h, r = found(from_y=1445, from_m=6, to_y=1445, to_m=6); assert r == ["HD-BBB"], r; ok("year + month")
-h, r = found(to_y=TY); assert "class=\"flash error\"" not in h and r == ALL[:5], r; ok("to current year (clamped, no error)")
+h, r = found(date_from=H(1446, 1, 1)); assert r == ["HD-DDD", "HD-EEE"], r; ok("from only")
+h, r = found(date_to=H(1445, 1, 10)); assert r == ["HD-AAA"], r; ok("to only")
+h, r = found(date_from="1445", date_to="1445"); assert r == ["HD-AAA", "HD-BBB", "HD-CCC"], r; ok("year only (all of 1445)")
+h, r = found(date_from="1446"); assert r == ["HD-DDD", "HD-EEE"], r
+h, r = found(date_from="1445-06", date_to="1445-06"); assert r == ["HD-BBB"], r; ok("year + month")
+h, r = found(date_to=str(TY)); assert "flash error" not in h and r == ALL[:5], r; ok("to current year (clamped, no error)")
 h, r = found(); assert r == ALL and "بلا تاريخ" not in h; ok("no date filter: all docs, no notice")
-h, r = found(from_y=1446, to_y=1445); assert "يجب ألا يكون بعد" in h and r == ALL; ok("from > to: error, filter not applied")
-h, r = found(from_y=TOMORROW[0], from_m=TOMORROW[1], from_d=TOMORROW[2])
-assert "flash error" in h and r == ALL; ok("future 'from' rejected")
-h, r = found(to_y=TOMORROW[0], to_m=TOMORROW[1], to_d=TOMORROW[2]); assert "flash error" in h and r == ALL; ok("future 'to' rejected")
-h, r = found(from_y=TY + 1); assert hu.ERR_RANGE in h and r == ALL
-h, r = found(from_y=M29[0], from_m=M29[1], from_d=30); assert hu.ERR_INVALID in h and r == ALL
-h, r = found(from_m=5); assert hu.ERR_PARTIAL in h and r == ALL
-h, r = found(from_y="abc"); assert hu.ERR_INVALID in h and r == ALL
-h, r = found(from_y="1445' OR '1'='1"); assert hu.ERR_INVALID in h and r == ALL
+h, r = found(date_from=H(1446, 1, 1), date_to=H(1445, 1, 1)); assert "يجب ألا يكون بعد" in h and r == ALL; ok("from > to: error, filter not applied")
+h, r = found(date_from=H(*TOMORROW)); assert "flash error" in h and r == ALL; ok("future 'from' rejected")
+h, r = found(date_to=H(*TOMORROW)); assert "flash error" in h and r == ALL; ok("future 'to' rejected")
+h, r = found(date_from=str(TY + 1)); assert hu.ERR_RANGE in h and r == ALL
+h, r = found(date_from=H(*M29, 30)); assert hu.ERR_INVALID in h and r == ALL
+for bad in ["abc", "1445/06/01", "1445-06-01' OR '1'='1", "12-06-1445"]:
+    h, r = found(date_from=bad); assert hu.ERR_INVALID in h and r == ALL, bad
 ok("invalid / tampered values rejected without breaking page")
-h, r = found(q="HD-", cat=2, from_y=1446); assert r == ["HD-DDD"], r; ok("date + text + category")
-h, r = found(cat=1, from_y=1445, to_y=1446); assert r == ["HD-AAA", "HD-BBB", "HD-EEE"], r; ok("date + category")
-h, r = found(q="HD-EEE", smart=1, from_y=1446); assert r == ["HD-EEE"], r
-h, r = found(q="HD-EEE", smart=1, to_y=1445); assert r == [], r; ok("date + smart search")
+h, r = found(q="HD-", cat=2, date_from="1446"); assert r == ["HD-DDD"], r; ok("date + text + category")
+h, r = found(cat=1, date_from="1445", date_to="1446"); assert r == ["HD-AAA", "HD-BBB", "HD-EEE"], r; ok("date + category")
+h, r = found(q="HD-EEE", smart=1, date_from="1446"); assert r == ["HD-EEE"], r
+h, r = found(q="HD-EEE", smart=1, date_to="1445"); assert r == [], r; ok("date + smart search")
 assert "1 محرم 1446هـ" in v.get("/").get_data(as_text=True); ok("cards show formatted Hijri date")
+
+# --- مكوّن التقويم: الحقول وجدول البيانات
+import json as _json
+from hijri_converter import Hijri
+home = v.get("/").get_data(as_text=True)
+assert 'type="hidden" name="date_from"' in home and 'type="hidden" name="date_to"' in home
+assert 'data-role="to" data-pair="hdp-date_from"' in home and 'data-role="from" data-pair="hdp-date_to"' in home
+assert "<select name=\"from_y\"" not in home and "hdp-text" in home and "readonly" in home and "hijri-picker.js" in home
+assert v.get("/static/hijri-picker.js").status_code == 200; ok("search uses two calendar pickers (hidden ISO fields)")
+cal = _json.loads(re.search(r'<script type="application/json" id="hijri-calendar-data">(.*?)</script>', home, re.S).group(1))
+assert cal["min"] == 1400 and cal["today"] == TODAY and cal["months"] == hu.MONTHS
+assert sorted(map(int, cal["years"])) == list(range(1400, TY + 1))
+for ys, months in cal["years"].items():
+    for mi, (ln, fw) in enumerate(months, 1):
+        h1 = Hijri(int(ys), mi, 1)
+        assert ln == h1.month_length() and fw == (h1.to_gregorian().weekday() + 1) % 7, (ys, mi, ln, fw)
+assert cal["years"]["1446"][0][1] == 0 and cal["years"]["1446"][8][1] == 6  # 1 محرم 1446 أحد، 1 رمضان 1446 سبت
+ok("calendar table sent to browser matches hijri-converter (month lengths + first weekday)")
 
 # --- الرفع
 c = client("clerk"); tok = csrf(c)
@@ -198,17 +216,16 @@ def last_doc():
 def n_docs():
     with A.app.app_context(): return db.query("SELECT COUNT(*) AS n FROM documents", one=True)["n"]
 up_html = c.get("/upload").get_data(as_text=True)
-assert 'name="doc_date"' not in up_html and 'name="doc_y"' in up_html and 'name="doc_m"' in up_html and 'name="doc_d"' in up_html
-assert "جمادى الأولى" in up_html and f'<option value="{TY}"' in up_html and f'<option value="{TY + 1}"' not in up_html
-assert '<option value="1400"' in up_html and '<option value="1399"' not in up_html; ok("upload page: Hijri picker only, years 1400..now")
-assert up(title="UP1", doc_y="1446", doc_m="9", doc_d="12").status_code == 302
-d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date"] is None; ok("upload: picker saved")
+assert 'name="doc_date"' not in up_html and 'type="hidden" name="doc_date_h" value=""' in up_html
+assert 'name="doc_y"' not in up_html and "<select name=\"doc_" not in up_html and 'placeholder="اختر التاريخ"' in up_html
+ok("upload page: single calendar field, no old dropdowns")
+assert up(title="UP1", doc_date_h="1446-09-12").status_code == 302
+d = last_doc(); assert d["doc_date_h"] == "1446-09-12" and d["doc_date"] is None and d["updated_at"] is None; ok("upload: calendar value saved (YYYY-MM-DD)")
 assert up(title="UP2").status_code == 302 and last_doc()["doc_date_h"] is None; ok("upload: date optional")
 before = n_docs()
-for bad, msg in [({"doc_y": "1446"}, hu.ERR_INCOMPLETE), ({"doc_y": str(M29[0]), "doc_m": str(M29[1]), "doc_d": "30"}, hu.ERR_INVALID),
-                 ({"doc_y": "1446", "doc_m": "13", "doc_d": "1"}, hu.ERR_INVALID),
-                 (dict(zip(("doc_y", "doc_m", "doc_d"), map(str, TOMORROW))), None)]:
-    r = up(title="BAD", **bad); t = r.get_data(as_text=True)
+for bad, msg in [("1446", hu.ERR_INCOMPLETE), (H(*M29, 30), hu.ERR_INVALID), ("1446-13-01", hu.ERR_INVALID),
+                 ("12/09/1446", hu.ERR_INVALID), (H(*TOMORROW), None), ("1399-01-01", hu.ERR_RANGE)]:
+    r = up(title="BAD", doc_date_h=bad); t = r.get_data(as_text=True)
     assert r.status_code == 200 and "flash error" in t and (msg is None or msg in t), bad
 assert n_docs() == before; ok("upload: invalid / future / partial rejected, nothing saved")
 # تعبئة تلقائية من استخراج الوثيقة (نحاكي الذكاء الاصطناعي)
@@ -225,38 +242,143 @@ A.ai.extract_text = lambda p, e: "تعميم بلا أي تاريخ واضح ف�
 A.ai.gemini_analyze = lambda t, c: None
 assert up(use_ai="1").status_code == 302 and last_doc()["doc_date_h"] is None; ok("upload auto: no date → empty")
 A.ai.extract_text = lambda p, e: "التاريخ: 1440/01/01 هـ\nالموضوع: المنتقي يتقدم على الاستخراج"
-assert up(use_ai="1", doc_y="1446", doc_m="1", doc_d="1").status_code == 302 and last_doc()["doc_date_h"] == "1446-01-01"
+assert up(use_ai="1", doc_date_h="1446-01-01").status_code == 302 and last_doc()["doc_date_h"] == "1446-01-01"
 ok("upload: picker wins over extracted date")
 A.ai.extract_text, A.ai.gemini_analyze = _ext, _gem
 
 # --- التعديل والعرض
 a = client("admin"); tok = csrf(a)
+def doc_row(i):
+    with A.app.app_context(): return db.query("SELECT * FROM documents WHERE id=%s", (i,), one=True)
+def edits_of(i):
+    with A.app.app_context(): return db.query("SELECT * FROM document_edits WHERE document_id=%s ORDER BY id", (i,))
 with A.app.app_context():
     did = db.query("SELECT id FROM documents WHERE title='HD-NNN'", one=True)["id"]
     db.execute("UPDATE documents SET doc_date=%s WHERE id=%s", ("12/03/2025", did))
 e = a.get(f"/doc/{did}/edit").get_data(as_text=True)
-assert 'name="doc_date"' not in e and "التاريخ مستخرج تلقائياً من الوثيقة، يمكنك تغييره بالاختيار" in e; ok("edit page: single Hijri picker + hint")
-assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN", "doc_y": "1446", "doc_m": "9", "doc_d": "12"}).status_code == 302
-with A.app.app_context(): row = db.query("SELECT doc_date, doc_date_h FROM documents WHERE id=%s", (did,), one=True)
-assert row["doc_date_h"] == "1446-09-12" and row["doc_date"] == "12/03/2025"; ok("edit: picker saved, old doc_date untouched")
+assert 'name="doc_date"' not in e and "التاريخ مستخرج تلقائياً من الوثيقة، يمكنك تغييره بالاختيار" in e
+assert e.count('type="hidden" name="doc_date_h"') == 1; ok("edit page: single Hijri calendar field + hint")
+assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN", "doc_date_h": "1446-09-12"}).status_code == 302
+row = doc_row(did); assert row["doc_date_h"] == "1446-09-12" and row["doc_date"] == "12/03/2025"; ok("edit: calendar value saved, old doc_date untouched")
 e = a.get(f"/doc/{did}/edit").get_data(as_text=True)
-assert '<option value="1446" selected>' in e and '<option value="9" selected>' in e and '<option value="12" selected>' in e; ok("edit: picker prefilled")
-r = a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "CHANGED", "doc_y": str(TOMORROW[0]), "doc_m": str(TOMORROW[1]), "doc_d": str(TOMORROW[2])})
-assert r.status_code == 200 and "flash error" in r.get_data(as_text=True)
-r = a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "CHANGED", "doc_y": str(M29[0]), "doc_m": str(M29[1]), "doc_d": "30"})
-assert r.status_code == 200 and hu.ERR_INVALID in r.get_data(as_text=True)
-with A.app.app_context(): assert db.query("SELECT title, doc_date_h FROM documents WHERE id=%s", (did,), one=True) == {"title": "HD-NNN", "doc_date_h": "1446-09-12"}
-ok("edit: future / invalid rejected, nothing changed")
+assert 'type="hidden" name="doc_date_h" value="1446-09-12"' in e and 'value="12 رمضان 1446هـ"' in e; ok("edit: calendar prefilled")
+n_logs = len(edits_of(did))
+for bad, msg in [(H(*TOMORROW), None), (H(*M29, 30), hu.ERR_INVALID), ("junk", hu.ERR_INVALID)]:
+    r = a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "CHANGED", "doc_date_h": bad})
+    assert r.status_code == 200 and "flash error" in r.get_data(as_text=True) and (msg is None or msg in r.get_data(as_text=True))
+row = doc_row(did); assert row["title"] == "HD-NNN" and row["doc_date_h"] == "1446-09-12" and len(edits_of(did)) == n_logs
+ok("edit: future / invalid rejected, nothing changed or logged")
 vw = a.get(f"/doc/{did}").get_data(as_text=True)
 assert "12 رمضان 1446هـ" in vw and "النص الأصلي في الوثيقة" in vw and "12/03/2025" in vw; ok("view: Hijri date + original text note when different")
 with A.app.app_context(): db.execute("UPDATE documents SET doc_date=%s WHERE id=%s", ("1446/09/12", did))
 assert "النص الأصلي في الوثيقة" not in a.get(f"/doc/{did}").get_data(as_text=True); ok("view: no note when original equals Hijri date")
-assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN", "doc_y": "", "doc_m": "", "doc_d": ""}).status_code == 302
-with A.app.app_context(): assert db.query("SELECT doc_date_h FROM documents WHERE id=%s", (did,), one=True)["doc_date_h"] is None
-ok("edit: clearing the picker removes the date")
-with A.app.app_context(): db.execute("UPDATE documents SET doc_date_h='1446-09-12' WHERE id=%s", (did,))
+assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN", "doc_date_h": ""}).status_code == 302
+assert doc_row(did)["doc_date_h"] is None; ok("edit: clearing the calendar removes the date")
+assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN", "doc_date_h": "1446-09-12"}).status_code == 302
 assert a.post(f"/doc/{did}/edit", data={"csrf": tok, "title": "HD-NNN"}).status_code == 302
-with A.app.app_context(): assert db.query("SELECT doc_date_h FROM documents WHERE id=%s", (did,), one=True)["doc_date_h"] == "1446-09-12"
-ok("edit: date kept when picker not submitted")
+assert doc_row(did)["doc_date_h"] == "1446-09-12"; ok("edit: date kept when field not submitted")
 assert "12 رمضان 1446هـ" in a.get("/dashboard").get_data(as_text=True); ok("dashboard shows Hijri date")
+
+# ===================================================== 12) سجل التعديلات
+with A.app.app_context():
+    admin_id = db.query("SELECT id FROM users WHERE username='admin'", one=True)["id"]
+    cats = {c["id"]: c["name"] for c in db.query("SELECT id, name FROM categories")}
+    log_id = db.execute("INSERT INTO documents (title, doc_number, doc_date_h, category_id, source, description, summary, "
+                        "filename, original_name) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        ("LOG-DOC", "11", "1446-07-05", 1, "جهة أ", "وصف قديم", "سطر1\nسطر2", "x.png", "x.png"))
+form = lambda **kw: {"csrf": tok, "title": "LOG-DOC", "doc_number": "11", "doc_date_h": "1446-07-05", "category_id": "1",
+                     "source": "جهة أ", "description": "وصف قديم", "summary": "سطر1\r\nسطر2", **kw}
+vw = a.get(f"/doc/{log_id}").get_data(as_text=True)
+assert "لم تُعدَّل منذ رفعها" in vw and "سجل التعديلات" not in vw and doc_row(log_id)["updated_at"] is None
+ok("new document: updated_at NULL, 'not edited since upload'")
+
+# بلا تغيير فعلي (حتى مع CRLF من textarea ومسافات زائدة) → لا شيء
+r = a.post(f"/doc/{log_id}/edit", data=form(title="  LOG-DOC  ", source="جهة أ "), follow_redirects=True)
+assert "لم تتغير أي بيانات" in r.get_data(as_text=True)
+d0 = doc_row(log_id); assert d0["updated_at"] is None and d0["updated_by"] is None and edits_of(log_id) == []
+ok("edit without real change: no updated_at, no log")
+
+# عرض/تحميل/بحث لا يغيّر updated_at
+for url in (f"/doc/{log_id}", f"/file/{log_id}", "/?q=LOG-DOC", f"/doc/{log_id}/edit", "/dashboard"):
+    a.get(url)
+assert doc_row(log_id)["updated_at"] is None; ok("view / download / search do not touch updated_at")
+
+# تعديل التاريخ وحده → سجل بالقديم والجديد
+assert a.post(f"/doc/{log_id}/edit", data=form(doc_date_h="1446-07-12")).status_code == 302
+d1r = doc_row(log_id); logs = edits_of(log_id)
+assert d1r["doc_date_h"] == "1446-07-12" and d1r["updated_by"] == admin_id and d1r["updated_at"]
+assert len(logs) == 1 and logs[0]["user_id"] == admin_id and logs[0]["edited_at"] == d1r["updated_at"]
+ch = _json.loads(logs[0]["changes"])
+assert ch == [{"field": "doc_date_h", "label": "التاريخ", "old": "5 رجب 1446هـ", "new": "12 رجب 1446هـ"}], ch
+ok("date-only edit: updated_at/by set, one log row with old → new (readable Hijri)")
+upd = datetime.strptime(str(d1r["updated_at"])[:19], "%Y-%m-%d %H:%M:%S")
+assert abs((datetime.now(timezone.utc).replace(tzinfo=None) - upd).total_seconds()) < 120; ok("updated_at stored as UTC now")
+vw = a.get(f"/doc/{log_id}").get_data(as_text=True)
+assert "آخر تعديل:" in vw and hu.format_riyadh(d1r["updated_at"]) in vw and "بواسطة admin" in vw
+assert "<bdi>5 رجب 1446هـ</bdi> ← <bdi>12 رجب 1446هـ</bdi>" in vw and "سجل التعديلات (1)" in vw
+ok("view: 'آخر تعديل' (Hijri + 12h time + user) and edit log entry")
+
+# عدة حقول: القصيرة بالقديم والجديد (التصنيف باسمه)، والطويلة «تم تعديله» فقط
+assert a.post(f"/doc/{log_id}/edit", data=form(doc_date_h="1446-07-12", title="LOG-DOC2", category_id="2",
+                                               description="وصف جديد طويل", summary="ملخص آخر")).status_code == 302
+logs = edits_of(log_id); assert len(logs) == 2
+ch = {c["field"]: c for c in _json.loads(logs[1]["changes"])}
+assert ch["title"] == {"field": "title", "label": "العنوان", "old": "LOG-DOC", "new": "LOG-DOC2"}
+assert ch["category_id"]["old"] == cats[1] and ch["category_id"]["new"] == cats[2]
+assert ch["description"] == {"field": "description", "label": "الملاحظات", "edited": True}
+assert ch["summary"] == {"field": "summary", "label": "الملخص", "edited": True}
+assert "وصف جديد" not in logs[1]["changes"] and "ملخص آخر" not in logs[1]["changes"] and set(ch) == {"title", "category_id", "description", "summary"}
+vw = a.get(f"/doc/{log_id}").get_data(as_text=True)
+assert vw.index("LOG-DOC2") < vw.index("سجل التعديلات") and vw.index("العنوان:") < vw.index("التاريخ:", vw.index("سجل التعديلات"))
+ok("multi-field edit: short old/new (category by name), long fields only 'edited'; newest first")
+
+# المعاملة: إن فشل تسجيل السجل لا يُحفظ التحديث
+_exec = db.execute
+def failing(sql, params=()):
+    if sql.startswith("INSERT INTO document_edits"):
+        raise RuntimeError("simulated failure")
+    return _exec(sql, params)
+db.execute = failing
+r = a.post(f"/doc/{log_id}/edit", data=form(title="SHOULD-NOT-SAVE", category_id="2", description="وصف جديد طويل", summary="ملخص آخر"))
+db.execute = _exec
+assert r.status_code == 500 and doc_row(log_id)["title"] == "LOG-DOC2" and len(edits_of(log_id)) == 2
+ok("transaction: update + log are atomic (rollback on failure)")
+
+# حذف مستخدم لا يكسر السجل
+assert a.post("/users", data={"csrf": tok, "username": "editor2", "full_name": "محرر مؤقت", "password": "pass123", "role": "clerk"}).status_code == 302
+e2 = client("editor2"); tok2 = csrf(e2)
+assert e2.post(f"/doc/{log_id}/edit", data={**form(title="LOG-DOC3", category_id="2", description="وصف جديد طويل", summary="ملخص آخر"), "csrf": tok2}).status_code == 302
+with A.app.app_context(): ed_id = db.query("SELECT id FROM users WHERE username='editor2'", one=True)["id"]
+assert doc_row(log_id)["updated_by"] == ed_id and "بواسطة محرر مؤقت" in a.get(f"/doc/{log_id}").get_data(as_text=True)
+assert a.post(f"/users/{ed_id}/delete", data={"csrf": tok}).status_code == 302
+logs = edits_of(log_id); assert len(logs) == 3 and logs[2]["user_id"] is None and doc_row(log_id)["updated_by"] is None
+vw = a.get(f"/doc/{log_id}"); assert vw.status_code == 200 and "مستخدم محذوف" in vw.get_data(as_text=True)
+ok("deleting a user keeps the log (user_id → NULL, shown as 'مستخدم محذوف')")
+
+# حذف الوثيقة يحذف سجلها
+assert a.post(f"/doc/{log_id}/delete", data={"csrf": tok}).status_code == 302
+assert edits_of(log_id) == []; ok("deleting a document deletes its edit log (CASCADE)")
+
+# توقيت الرياض
+g1 = Gregorian(2026, 11, 18).to_hijri(); g2 = Gregorian(2026, 11, 19).to_hijri()
+assert hu.format_riyadh("2026-11-18 19:32:00") == f"{hu.format_hijri(hu.to_iso(g1.year, g1.month, g1.day))} — 10:32 م"
+assert hu.format_riyadh(datetime(2026, 11, 18, 21, 5)) == f"{hu.format_hijri(hu.to_iso(g2.year, g2.month, g2.day))} — 12:05 ص"
+assert hu.format_riyadh("2026-11-18 09:00:00").endswith("12:00 م") and hu.format_riyadh(None) == ""
+ok("format_riyadh: UTC → Riyadh (+3), Hijri date, 12h ص/م, day rollover")
+
+# ترحيل سجل التعديلات: idempotent على قاعدة قديمة
+import migrate_edit_log
+oe = sqlite3.connect(os.path.join(tmp, "old_edit.db"))
+oe.executescript("CREATE TABLE users (id INTEGER PRIMARY KEY, full_name TEXT);"
+                 "CREATE TABLE documents (id INTEGER PRIMARY KEY, title TEXT, created_at TEXT);"
+                 "INSERT INTO users VALUES (1,'u'); INSERT INTO documents VALUES (1,'a','2025-01-01 10:00:00'),(2,'b',NULL);")
+m1 = migrate_edit_log.migrate(oe, "sqlite")
+assert set(m1["done"]) == {"documents.updated_at", "documents.updated_by", "document_edits"} and m1["documents"] == 2 and m1["edited"] == 0, m1
+m2 = migrate_edit_log.migrate(oe, "sqlite")
+assert m2["done"] == [] and m2["edited"] == 0, m2
+cols = {r[1] for r in oe.execute("PRAGMA table_info(documents)")}
+assert {"updated_at", "updated_by"} <= cols and oe.execute("SELECT COUNT(*) FROM documents WHERE updated_at IS NULL").fetchone()[0] == 2
+assert {r[1] for r in oe.execute("PRAGMA table_info(document_edits)")} == {"id", "document_id", "user_id", "edited_at", "changes"}
+assert oe.execute("SELECT title, created_at FROM documents WHERE id=1").fetchone() == ("a", "2025-01-01 10:00:00")
+oe.close(); ok("migration (edit log): idempotent, existing docs stay updated_at NULL, no data touched")
 print("ALL TESTS PASSED")

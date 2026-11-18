@@ -22,8 +22,35 @@
       {% elif orig_date %}<dt>التاريخ</dt><dd><small class="muted">النص الأصلي في الوثيقة: <bdi>{{ orig_date }}</bdi></small></dd>{% endif %}
       <dt>الجهة</dt><dd>{{ d.source or '—' }}</dd>
       <dt>أُرشفت بواسطة</dt><dd>{{ d.uploader or '—' }}</dd>
-      <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at }}</dd>
+      <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at|riyadh or '—' }}</dd>
     </dl>
+    <div class="last-edit">
+      {% if d.updated_at %}
+        <b>آخر تعديل:</b> {{ d.updated_at|riyadh }} — بواسطة {{ d.updater or 'مستخدم محذوف' }}
+      {% else %}
+        <b>لم تُعدَّل منذ رفعها</b>{% if d.created_at %} <span class="muted">(رُفعت: {{ d.created_at|riyadh }})</span>{% endif %}
+      {% endif %}
+    </div>
+    {% if edits %}
+    <details class="edit-log">
+      <summary>سجل التعديلات ({{ edits|length }})</summary>
+      <ol>
+        {% for e in edits %}
+        <li>
+          <div class="edit-meta">{{ e.edited_at|riyadh }} — {{ e.editor or 'مستخدم محذوف' }}</div>
+          <ul>
+            {% for c in e.changes %}
+            <li>{{ c.label }}:
+              {% if c.edited %}<span class="muted">تم تعديله</span>
+              {% else %}<bdi>{{ c.old or '—' }}</bdi> ← <bdi>{{ c.new or '—' }}</bdi>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </li>
+        {% endfor %}
+      </ol>
+    </details>
+    {% endif %}
     {% if d.description %}<h4>ملاحظات</h4><p>{{ d.description }}</p>{% endif %}
     {% if d.summary %}<h4>🤖 ملخص تلقائي</h4><p class="sum">{{ d.summary }}</p>{% endif %}
     {% if d.ocr_text %}<details><summary>النص المستخرج (OCR)</summary><pre>{{ d.ocr_text }}</pre></details>{% endif %}

@@ -1,4 +1,5 @@
 """نظام الوثائق والمحفوظات - إدارة التعليم بمنطقة حائل."""
+import json
 import os
 import secrets
 import uuid
@@ -64,18 +65,29 @@ def _hijri_filter(s):
     return hu.format_hijri(s)
 
 
-def picker_value(prefix, src):
-    """القيم المختارة لمكوّن التاريخ الهجري من request.args/form (كنصوص) لإعادة عرضها."""
-    return {k: (src.get(f"{prefix}_{k}") or "").strip() for k in ("y", "m", "d")}
-
-
-def iso_to_picker(iso):
-    p = hu.split_iso(iso)
-    return {"y": str(p[0]), "m": str(p[1]), "d": str(p[2])} if p else {"y": "", "m": "", "d": ""}
+@app.template_filter("riyadh")
+def _riyadh_filter(v):
+    return hu.format_riyadh(v)
 
 
 def render_with_picker(tpl, **kw):
-    return render_template(tpl, HIJRI=hu.picker_context(), **kw)
+    """صفحة فيها مكوّن التقويم الهجري: نرسل معها جدول التقويم المحسوب في الخادم."""
+    return render_template(tpl, HIJRI=hu.calendar_data(), **kw)
+
+
+def picked_date(value, **kw):
+    """قيمة الحقل المخفي للتقويم ('YYYY-MM-DD' هجري) → (iso, None) أو (None, None) أو (None, خطأ)."""
+    parts = hu.split_parts(value)
+    if parts is None:
+        return None, hu.ERR_INVALID
+    return hu.from_picker(*parts, **kw)
+
+
+def picked_bound(value, end, today):
+    parts = hu.split_parts(value)
+    if parts is None:
+        return None, hu.ERR_INVALID
+    return hu.range_bound(*parts, end=end, today=today)
 
 
 def login_required(roles=None):
@@ -152,10 +164,10 @@ def index():
     q = request.args.get("q", "").strip()
     cat = request.args.get("cat", type=int)
     smart = request.args.get("smart") == "1"
-    f_from, f_to = picker_value("from", request.args), picker_value("to", request.args)
+    f_from, f_to = request.args.get("date_from", "").strip(), request.args.get("date_to", "").strip()
     today = hu.today_hijri()
-    d_from, err_from = hu.range_bound(f_from["y"], f_from["m"], f_from["d"], end=False, today=today)
-    d_to, err_to = hu.range_bound(f_to["y"], f_to["m"], f_to["d"], end=True, today=today)
+    d_from, err_from = picked_bound(f_from, end=False, today=today)
+    d_to, err_to = picked_bound(f_to, end=True, today=today)
     for err, label in ((err_from, "من"), (err_to, "إلى")):
         if err:
             flash(f"تاريخ «{label}»: {err}", "error")
@@ -195,8 +207,10 @@ def index():
     no_date = None
     if d_from or d_to:  # الوثائق بلا تاريخ تُستبعد عند الفلتر
         no_date = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+    # نعيد للمكوّن القيمة الكاملة فقط (القيم الجزئية من الروابط تبقى في الفلتر لكن لا تُعرض في الخانة)
+    show = lambda v: v if hu.split_iso(v) else ""
     return render_with_picker("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"],
-                              f_from=f_from, f_to=f_to, no_date=no_date)
+                              f_from=show(f_from), f_to=show(f_to), no_date=no_date)
 
 
 # --------------------------------------------------------------- رفع وثيقة
@@ -204,20 +218,21 @@ def index():
 @login_required({"admin", "clerk"})
 def upload():
     cats = db.query("SELECT * FROM categories ORDER BY name")
-    pick = picker_value("doc", request.form)
+    pick = request.form.get("doc_date_h", "").strip()
+    keep = pick if hu.split_iso(pick) else ""  # نعيد عرض التاريخ الصالح فقط بعد خطأ
     if request.method == "POST":
         f = request.files.get("file")
         if not f or not f.filename:
             flash("اختر ملفاً للرفع", "error")
-            return render_with_picker("upload.html", cats=cats, pick=pick)
+            return render_with_picker("upload.html", cats=cats, pick=keep)
         if not allowed(f.filename):
             flash("نوع الملف غير مدعوم. المسموح: PDF أو صورة", "error")
-            return render_with_picker("upload.html", cats=cats, pick=pick)
+            return render_with_picker("upload.html", cats=cats, pick=keep)
         today = hu.today_hijri()
-        date_h, date_err = hu.from_picker(pick["y"], pick["m"], pick["d"], today=today)
+        date_h, date_err = picked_date(pick, today=today)
         if date_err:  # نتحقق قبل حفظ الملف حتى لا يبقى ملف يتيم على القرص
             flash(f"التاريخ: {date_err}", "error")
-            return render_with_picker("upload.html", cats=cats, pick=pick)
+            return render_with_picker("upload.html", cats=cats, pick=keep)
         ext = f.filename.rsplit(".", 1)[1].lower()
         stored = f"{uuid.uuid4().hex}.{ext}"
         path = os.path.join(app.config["UPLOAD_FOLDER"], stored)
@@ -283,17 +298,50 @@ def upload():
             msg += " — عبّأ الذكاء الاصطناعي: " + "، ".join(notes)
         flash(msg, "ok")
         return redirect(url_for("view", doc_id=doc_id))
-    return render_with_picker("upload.html", cats=cats, pick=pick)
+    return render_with_picker("upload.html", cats=cats, pick=keep)
 
 
 # --------------------------------------------------------- عرض/تعديل/حذف
 def get_doc(doc_id):
-    d = db.query("SELECT d.*, c.name AS category, u.full_name AS uploader FROM documents d "
+    d = db.query("SELECT d.*, c.name AS category, u.full_name AS uploader, ub.full_name AS updater FROM documents d "
                  "LEFT JOIN categories c ON c.id=d.category_id LEFT JOIN users u ON u.id=d.uploaded_by "
-                 "WHERE d.id=%s", (doc_id,), one=True)
+                 "LEFT JOIN users ub ON ub.id=d.updated_by WHERE d.id=%s", (doc_id,), one=True)
     if not d:
         abort(404)
     return d
+
+
+# الحقول التي تُقارن عند التعديل: (العمود، التسمية، قصير؟). القصير يُسجَّل قديمه وجديده، والطويل يُسجَّل أنه عُدِّل فقط.
+EDIT_FIELDS = [("title", "العنوان", True), ("doc_number", "رقم الوثيقة", True), ("doc_date_h", "التاريخ", True),
+               ("category_id", "التصنيف", True), ("source", "الجهة", True),
+               ("description", "الملاحظات", False), ("summary", "الملخص", False)]
+
+
+def _norm(v):
+    """توحيد للمقارنة: None/فارغ متساويان، وأسطر textarea (CRLF) مثل المخزّنة (LF)، بلا مسافات طرفية."""
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    v = str(v).replace("\r\n", "\n").strip()
+    return v or None
+
+
+def diff_document(old: dict, new: dict, cat_names: dict) -> list[dict]:
+    """يقارن القيم القديمة بالجديدة ويرجع قائمة التغييرات (فارغة إن لم يتغير شيء فعلياً)."""
+    shown = {"doc_date_h": lambda v: hu.format_hijri(v) or None,
+             "category_id": lambda v: cat_names.get(v) if v is not None else None}
+    changes = []
+    for col, label, short in EDIT_FIELDS:
+        a, b = _norm(old.get(col)), _norm(new.get(col))
+        if a == b:
+            continue
+        if short:
+            fmt = shown.get(col, lambda v: v)
+            changes.append({"field": col, "label": label, "old": fmt(a), "new": fmt(b)})
+        else:
+            changes.append({"field": col, "label": label, "edited": True})
+    return changes
 
 
 @app.route("/doc/<int:doc_id>")
@@ -304,7 +352,16 @@ def view(doc_id):
     # النص القديم يُعرض كملاحظة فقط إن اختلف عن التاريخ المعتمد (ليس هو نفسه مكتوباً هجرياً)
     orig = (d.get("doc_date") or "").strip()
     show_orig = bool(orig) and hu.parse_any_date_kind(orig) != ((d.get("doc_date_h"), "h") if d.get("doc_date_h") else None)
-    return render_template("view.html", d=d, is_pdf=(ext == "pdf"), orig_date=orig if show_orig else None)
+    edits = db.query("SELECT e.id, e.edited_at, e.changes, u.full_name AS editor FROM document_edits e "
+                     "LEFT JOIN users u ON u.id=e.user_id WHERE e.document_id=%s "
+                     "ORDER BY e.edited_at DESC, e.id DESC", (doc_id,))
+    for e in edits:
+        try:
+            e["changes"] = json.loads(e["changes"] or "[]")
+        except ValueError:
+            e["changes"] = []
+    # العرض للقراءة فقط: لا يغيّر updated_at
+    return render_template("view.html", d=d, is_pdf=(ext == "pdf"), orig_date=orig if show_orig else None, edits=edits)
 
 
 @app.route("/file/<int:doc_id>")
@@ -323,25 +380,35 @@ def edit(doc_id):
     cats = db.query("SELECT * FROM categories ORDER BY name")
     if request.method == "POST":
         f = request.form
-        pick = picker_value("doc", f)
-        if not any(k in f for k in ("doc_y", "doc_m", "doc_d")):  # المكوّن لم يُرسل أصلاً → لا نغيّر التاريخ
+        if "doc_date_h" not in f:  # المكوّن لم يُرسل أصلاً → لا نغيّر التاريخ
             date_h, date_err = d.get("doc_date_h"), None
         else:
-            date_h, date_err = hu.from_picker(pick["y"], pick["m"], pick["d"])
+            date_h, date_err = picked_date(f.get("doc_date_h"))
         if date_err:
             flash(f"التاريخ: {date_err}", "error")
-            return render_with_picker("edit.html", d=d, cats=cats, pick=pick)
-        title = f.get("title", "").strip() or d["title"]
-        number, source, desc = f.get("doc_number", "").strip(), f.get("source", "").strip(), f.get("description", "").strip()
-        # doc_date القديم لا يُلمس: يبقى أرشيفاً للنص الأصلي
-        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date_h=%s, category_id=%s, source=%s, "
-                   "description=%s, summary=%s, search_text=%s WHERE id=%s",
-                   (title, number or None, date_h, f.get("category_id", type=int),
-                    source or None, desc or None, f.get("summary", "").strip() or None,
-                    ai.build_search_text(title, number, source, desc, d["ocr_text"] or ""), doc_id))
-        flash("تم حفظ التعديلات", "ok")
+            return render_with_picker("edit.html", d=d, cats=cats, pick=d.get("doc_date_h") or "")
+        new = {"title": _norm(f.get("title")) or d["title"], "doc_number": _norm(f.get("doc_number")),
+               "doc_date_h": date_h, "category_id": f.get("category_id", type=int), "source": _norm(f.get("source")),
+               "description": _norm(f.get("description")), "summary": _norm(f.get("summary"))}
+        changes = diff_document(d, new, {c["id"]: c["name"] for c in cats})
+        if not changes:  # لا تغيير فعلي: لا نلمس updated_at ولا نسجّل شيئاً
+            flash("لم تتغير أي بيانات.", "ok")
+            return redirect(url_for("view", doc_id=doc_id))
+        now = hu.utc_now_str()
+        # التحديث والسجل معاً أو لا شيء. doc_date القديم لا يُلمس: يبقى أرشيفاً للنص الأصلي
+        with db.transaction():
+            db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date_h=%s, category_id=%s, source=%s, "
+                       "description=%s, summary=%s, search_text=%s, updated_at=%s, updated_by=%s WHERE id=%s",
+                       (new["title"], new["doc_number"], new["doc_date_h"], new["category_id"], new["source"],
+                        new["description"], new["summary"],
+                        ai.build_search_text(new["title"], new["doc_number"] or "", new["source"] or "",
+                                             new["description"] or "", d["ocr_text"] or ""),
+                        now, g.user["id"], doc_id))
+            db.execute("INSERT INTO document_edits (document_id, user_id, edited_at, changes) VALUES (%s,%s,%s,%s)",
+                       (doc_id, g.user["id"], now, json.dumps(changes, ensure_ascii=False)))
+        flash("تم حفظ التعديلات: " + "، ".join(c["label"] for c in changes), "ok")
         return redirect(url_for("view", doc_id=doc_id))
-    return render_with_picker("edit.html", d=d, cats=cats, pick=iso_to_picker(d.get("doc_date_h")))
+    return render_with_picker("edit.html", d=d, cats=cats, pick=d.get("doc_date_h") or "")
 
 
 @app.route("/doc/<int:doc_id>/delete", methods=["POST"])

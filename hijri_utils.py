@@ -188,10 +188,58 @@ def range_bound(y, m, d, end: bool, today: str | None = None):
     return (min(last, today) if end else first), None
 
 
-def picker_context(today: str | None = None) -> dict:
-    """بيانات قوائم الاختيار: السنوات (من الأحدث)، الأشهر، أطوال الأشهر لكل سنة، واليوم."""
+_PARTS = re.compile(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
+
+
+def split_parts(value: str | None):
+    """قيمة الحقل المخفي ('1447-05-12'، أو جزئية '1447' / '1447-05' في روابط البحث) → (y, m, d) كنصوص
+    ('' للمفقود). فارغ → ('', '', ''). صيغة غير مفهومة → None."""
+    v = (value or "").strip()
+    if not v:
+        return "", "", ""
+    m = _PARTS.fullmatch(v)
+    return (m[1], m[2] or "", m[3] or "") if m else None
+
+
+@lru_cache(maxsize=None)
+def _first_weekday(y: int, m: int) -> int:
+    """يوم الأسبوع لأول يوم في الشهر الهجري: 0=الأحد ... 6=السبت."""
+    return (Hijri(y, m, 1).to_gregorian().weekday() + 1) % 7  # weekday(): الاثنين=0
+
+
+def calendar_data(today: str | None = None) -> dict:
+    """جدول التقويم الذي يقرؤه المكوّن في المتصفح (لا منطق تقويم في JS):
+    لكل سنة من 1400 حتى الحالية: [[عدد أيام الشهر, يوم الأسبوع لأوله (0=الأحد)], ...12]."""
     today = today or today_hijri()
-    ty, tm, td = (int(x) for x in today.split("-"))
-    years = list(range(ty, MIN_YEAR - 1, -1))
-    return {"years": years, "months": MONTHS, "today": {"y": ty, "m": tm, "d": td},
-            "lengths": {y: [month_length(y, mm) or 30 for mm in range(1, 13)] for y in years}}
+    ty = int(today[:4])
+    return {"min": MIN_YEAR, "today": today, "months": MONTHS,
+            "years": {str(y): [[month_length(y, m), _first_weekday(y, m)] for m in range(1, 13)]
+                      for y in range(MIN_YEAR, ty + 1)}}
+
+
+def _as_utc(value):
+    """قيمة وقت من القاعدة (datetime أو نص 'YYYY-MM-DD HH:MM:SS') مخزّنة بتوقيت UTC → datetime مدرك للتوقيت."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip().replace("T", " ")[:19])
+        except ValueError:
+            return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def format_riyadh(value) -> str:
+    """وقت UTC → '12 جمادى الأولى 1447هـ — 10:32 م' بتوقيت الرياض، وفارغ إن لم يوجد."""
+    dt = _as_utc(value)
+    if not dt:
+        return ""
+    local = dt.astimezone(RIYADH)
+    h = Gregorian.fromdate(local.date()).to_hijri()
+    hour = local.hour % 12 or 12
+    return f"{format_hijri(to_iso(h.year, h.month, h.day))} — {hour}:{local.minute:02d} {'ص' if local.hour < 12 else 'م'}"
+
+
+def utc_now_str() -> str:
+    """الوقت الحالي UTC بصيغة 'YYYY-MM-DD HH:MM:SS' للتخزين في DATETIME (متّسق مع created_at)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

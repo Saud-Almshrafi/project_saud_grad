@@ -32,11 +32,26 @@ CREATE TABLE IF NOT EXISTS documents (
   summary TEXT,                      -- الملخص التلقائي
   uploaded_by INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NULL,          -- آخر تعديل فعلي (UTC)، NULL = لم تُعدَّل منذ رفعها
+  updated_by INT NULL,               -- من قام بآخر تعديل
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_documents_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_doc_number (doc_number),
   INDEX idx_category (category_id),
   INDEX idx_doc_date_h (doc_date_h)
+) ENGINE=InnoDB;
+
+-- سجل التعديلات: صف لكل تعديل فعلي على وثيقة
+CREATE TABLE IF NOT EXISTS document_edits (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  document_id INT NOT NULL,
+  user_id INT NULL,
+  edited_at DATETIME NOT NULL,       -- UTC
+  changes TEXT NOT NULL,             -- JSON: الحقول المتغيرة (القديم والجديد للحقول القصيرة)
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_edits_doc (document_id, edited_at)
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO categories (name) VALUES

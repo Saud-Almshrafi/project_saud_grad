@@ -13,8 +13,8 @@
   <label class="check"><input type="checkbox" name="smart" value="1" {{ 'checked' if smart }}> 🤖 بحث ذكي</label>
   <button class="btn">بحث</button>
   <div class="date-range">
-    <div class="grp"><span>من تاريخ</span>{{ hp.picker("from", f_from, HIJRI) }}</div>
-    <div class="grp"><span>إلى تاريخ</span>{{ hp.picker("to", f_to, HIJRI) }}</div>
+    <div class="grp"><span>من تاريخ</span>{{ hp.picker("date_from", f_from, role="from", pair="hdp-date_to", label="من تاريخ") }}</div>
+    <div class="grp"><span>إلى تاريخ</span>{{ hp.picker("date_to", f_to, role="to", pair="hdp-date_from", label="إلى تاريخ") }}</div>
   </div>
 </form>
 {% if no_date %}<p class="muted small">⚠ يوجد {{ no_date }} وثيقة في الأرشيف بلا تاريخ، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}

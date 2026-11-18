@@ -16,7 +16,7 @@
   </div>
   <div class="field">
     <span class="field-label">التاريخ الهجري</span>
-    {{ hp.picker("doc", pick, HIJRI) }}
+    {{ hp.picker("doc_date_h", pick) }}
     <small class="muted">التاريخ مستخرج تلقائياً من الوثيقة، يمكنك تغييره بالاختيار</small>
   </div>
   <label>ملاحظات<textarea name="description" rows="3">{{ d.description or '' }}</textarea></label>
