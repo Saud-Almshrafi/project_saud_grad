@@ -81,9 +81,13 @@ def extract_text(path: str, ext: str) -> str:
         if ext == "pdf":
             return _pdf_text(path)
         if ext in {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}:
+            # Gemini أولاً (يفهم الصور)، وإن فشل أو لم يُفعَّل نستخدم Tesseract
+            text = gemini_ocr(path, ext)
+            if len(text) >= 20:
+                return text
             return _image_ocr(path)
-    except Exception as exc:  # لا نكسر الرفع إذا فشل الـ OCR
-        return f""
+    except Exception:  # لا نكسر الرفع إذا فشل الـ OCR
+        return ""
     return ""
 
 
@@ -137,7 +141,10 @@ def _pdf_text(path: str) -> str:
     text = "\n".join(parts).strip()
     if len(normalize(text)) >= 40:  # PDF نصّي
         return text
-    # PDF ممسوح ضوئياً: نحوّل الصفحات لصور ثم OCR
+    # PDF ممسوح ضوئياً: Gemini يقرأ الملف مباشرة، وإلا نحوّل الصفحات لصور ثم Tesseract
+    g = gemini_ocr(path, "pdf")
+    if len(g) >= 20:
+        return g
     from pdf2image import convert_from_path
     pages = convert_from_path(path, dpi=200, first_page=1, last_page=10)
     return "\n".join(_image_ocr(p) for p in pages).strip()
@@ -206,7 +213,16 @@ _DATE_RES = [
 def extract_fields(text: str) -> dict:
     """يحاول استخراج رقم الوثيقة وتاريخها وعنوانها من النص."""
     t = (text or "").translate(_AR_DIGITS)
-    out = {"doc_number": None, "doc_date": None, "title": None}
+    out = {"doc_number": None, "doc_date": None, "title": None, "source": None}
+    m = re.search(r"(?:الجهة(?:\s+المصدرة)?|المرسل|صادر\s+من)\s*[:：]\s*(.{4,80})", t)
+    if m:
+        out["source"] = m.group(1).split("\n")[0].strip(" :-")
+    else:  # الجهة غالباً في ترويسة الوثيقة (أول أسطرها)
+        for line in t.splitlines()[:12]:
+            line = line.strip()
+            if 6 <= len(line) <= 70 and re.match(r"(?:وزارة|الإدارة|إدارة|مكتب|هيئة|الهيئة|جامعة|مدرسة|المديرية)", line):
+                out["source"] = line
+                break
     m = _NUM_RE.search(t)
     if m:
         out["doc_number"] = m.group(1).strip("-/")
@@ -234,47 +250,77 @@ def gemini_enabled() -> bool:
 def gemini_analyze(text: str, categories: list[str]) -> dict | None:
     """يحلل الوثيقة بـ Gemini ويرجع {title, doc_number, doc_date, category, summary}.
     يرجع None عند أي فشل (لا مفتاح، لا إنترنت، تجاوز الحد...) ليعمل البديل المحلي."""
-    key = os.getenv("GEMINI_API_KEY")
-    if not key or not text or len(text.strip()) < 20:
+    if not gemini_enabled() or not text or len(text.strip()) < 20:
         return None
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     prompt = (
         "أنت مساعد أرشفة لوثائق إدارية عربية (تعاميم، قرارات، خطابات). "
         "حلّل نص الوثيقة التالي (قد يحتوي أخطاء OCR بسيطة) وأرجع JSON فقط بالحقول:\n"
         "title: عنوان مختصر للموضوع (أقل من 120 حرفاً)\n"
         "doc_number: رقم الوثيقة أو null\n"
         "doc_date: التاريخ كما ورد (هجري أو ميلادي) أو null\n"
+        "source: الجهة المصدرة للوثيقة (الإدارة أو الوزارة أو المدرسة التي أصدرتها، من الترويسة أو التوقيع) أو null\n"
         f"category: واحد بالضبط من {json.dumps(categories, ensure_ascii=False)} أو null\n"
         "summary: ملخص بالعربية من 2 إلى 3 جمل يوضح المطلوب والجهة والمواعيد.\n"
         "لا تخترع معلومات غير موجودة في النص.\n\nنص الوثيقة:\n" + text[:12000]
     )
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-    }).encode("utf-8")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    req = urllib.request.Request(
-        url, data=body,
-        headers={"Content-Type": "application/json", "x-goog-api-key": key})
     try:
-        data = None
-        for attempt in range(3):  # 503/429 مؤقتة غالباً: نعيد المحاولة
-            try:
-                with urllib.request.urlopen(req, timeout=40) as r:
-                    data = json.load(r)
-                break
-            except urllib.error.HTTPError as e:
-                if e.code not in (429, 500, 503) or attempt == 2:
-                    raise
-                time.sleep(2 * (attempt + 1))
-        raw = data["candidates"][0]["content"]["parts"][0]["text"]
-        res = json.loads(raw)
+        res = json.loads(_gemini_call([{"text": prompt}], json_mode=True))
         if not isinstance(res, dict):
             return None
         return {k: (str(res[k]).strip() if res.get(k) else None)
-                for k in ("title", "doc_number", "doc_date", "category", "summary")}
+                for k in ("title", "doc_number", "doc_date", "source", "category", "summary")}
     except Exception:
         return None
+
+
+def _gemini_call(parts: list, json_mode: bool = False, timeout: int = 90) -> str:
+    """يرسل طلباً إلى Gemini ويرجع النص الناتج. يعيد المحاولة عند الازدحام المؤقت."""
+    model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+    cfg = {"temperature": 0.0}
+    if json_mode:
+        cfg["responseMimeType"] = "application/json"
+    body = json.dumps({"contents": [{"parts": parts}], "generationConfig": cfg}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        data=body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": os.getenv("GEMINI_API_KEY", "")})
+    data = None
+    for attempt in range(3):  # 503/429 مؤقتة غالباً: نعيد المحاولة
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 503) or attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
+    return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
+_MIME = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+         "webp": "image/webp", "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff"}
+
+
+def gemini_ocr(path: str, ext: str) -> str:
+    """يقرأ صورة أو PDF ممسوح مباشرة بـ Gemini (رؤية حاسوبية) ويرجع النص الكامل.
+    أدق من Tesseract مع الصور الضعيفة والخطوط المتنوعة والأختام. يرجع "" عند الفشل."""
+    import base64
+    mime = _MIME.get(ext.lower().lstrip("."))
+    if not gemini_enabled() or not mime or os.path.getsize(path) > 15 * 1024 * 1024:
+        return ""
+    prompt = (
+        "انسخ كل النص الموجود في هذه الوثيقة العربية كما هو مكتوب، بنفس ترتيب القراءة "
+        "(من الأعلى للأسفل ومن اليمين لليسار)، بدون تلخيص أو شرح أو تصحيح للمعنى. "
+        "حافظ على الأرقام والتواريخ ورقم الوثيقة بدقة، وانسخ الجداول سطراً بسطر. "
+        "إذا وُجد ختم أو توقيع اكتب [ختم] أو [توقيع]. أرجع النص فقط.")
+    with open(path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode("ascii")
+    try:
+        return _gemini_call(
+            [{"inline_data": {"mime_type": mime, "data": b64}}, {"text": prompt}],
+            timeout=120).strip()
+    except Exception:
+        return ""
 
 
 # ------------------------------------------------------------- بحث ذكي

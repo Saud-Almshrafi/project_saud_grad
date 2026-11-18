@@ -4,16 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}الوثائق والمحفوظات{% endblock %} | إدارة التعليم بحائل</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 {% if g.user %}
 <header class="topbar">
   <a class="brand" href="{{ url_for('index') }}">
-    <span class="logo">🗂️</span>
+    <img class="logo" src="{{ url_for('static', filename='logo.png') }}" alt="وزارة التعليم">
     <span><b>الوثائق والمحفوظات</b><small>إدارة التعليم بمنطقة حائل</small></span>
   </a>
   <nav>
+    <a href="{{ url_for('dashboard') }}">لوحة المعلومات</a>
     <a href="{{ url_for('index') }}">الأرشيف</a>
     {% if g.user.role in ('admin','clerk') %}<a href="{{ url_for('upload') }}">+ أرشفة وثيقة</a>{% endif %}
     {% if g.user.role == 'admin' %}

@@ -95,6 +95,36 @@ def logout():
     return redirect(url_for("login"))
 
 
+# ------------------------------------------------------------- لوحة المعلومات
+_DASH_COLORS = ["#0f6b4f", "#2e9e7a", "#c9a227", "#3b82a0", "#8e5ea2", "#c0392b", "#6a7a73", "#d98e04"]
+
+
+@app.route("/dashboard")
+@login_required()
+def dashboard():
+    rows = db.query(
+        "SELECT c.id, c.name, COUNT(d.id) AS cnt FROM categories c "
+        "LEFT JOIN documents d ON d.category_id=c.id GROUP BY c.id, c.name ORDER BY cnt DESC, c.name")
+    none = db.query("SELECT COUNT(*) AS n FROM documents WHERE category_id IS NULL", one=True)["n"]
+    if none:
+        rows.append({"id": None, "name": "بدون تصنيف", "cnt": none})
+    total = sum(r["cnt"] for r in rows)
+    top = max((r["cnt"] for r in rows), default=0)
+    stops, acc = [], 0
+    for i, r in enumerate(rows):
+        r["color"] = _DASH_COLORS[i % len(_DASH_COLORS)]
+        r["pct"] = round(r["cnt"] * 100 / total, 1) if total else 0
+        r["bar"] = round(r["cnt"] * 100 / top) if top else 0
+        if r["cnt"]:
+            stops.append(f"{r['color']} {acc}% {acc + r['pct']}%")
+            acc += r["pct"]
+    donut = "conic-gradient(" + ", ".join(stops) + ")" if stops else "#e6ece9"
+    recent = db.query(
+        "SELECT d.id, d.title, d.created_at, c.name AS category FROM documents d "
+        "LEFT JOIN categories c ON c.id=d.category_id ORDER BY d.id DESC LIMIT 5")
+    return render_template("dashboard.html", rows=rows, total=total, donut=donut, recent=recent)
+
+
 # -------------------------------------------------------- القائمة والبحث
 @app.route("/")
 @login_required()
@@ -162,7 +192,7 @@ def upload():
                 gem = ai.gemini_analyze(text, [c["name"] for c in cats])
                 if gem:  # Gemini أدق؛ وإن فشل نبقى على النتائج المحلية
                     summary = gem["summary"] or summary
-                    for k in ("title", "doc_number", "doc_date"):
+                    for k in ("title", "doc_number", "doc_date", "source"):
                         fields[k] = gem[k] or fields[k]
                     gcat = gem["category"]
                     notes.append("Gemini")
@@ -177,6 +207,8 @@ def upload():
                     number = fields["doc_number"]; notes.append("الرقم")
                 if not date and fields["doc_date"]:
                     date = fields["doc_date"]; notes.append("التاريخ")
+                if not source and fields["source"]:
+                    source = fields["source"][:150]; notes.append("الجهة")
                 if not cat_id:
                     guess = gcat or ai.classify(text, [c["name"] for c in cats])
                     cat = next((c for c in cats if c["name"] == guess), None)

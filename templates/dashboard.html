@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}لوحة المعلومات{% endblock %}
+{% block content %}
+<div class="page-head"><h1>لوحة المعلومات</h1></div>
+
+{% if total == 0 %}
+  <div class="card empty">لا توجد وثائق مؤرشفة بعد.</div>
+{% else %}
+<div class="stats">
+  {% for r in rows[:4] %}
+  <a class="card stat" href="{{ url_for('index', cat=r.id) if r.id else url_for('index') }}" style="border-top:4px solid {{ r.color }}">
+    <span class="muted">{{ r.name }}</span>
+    <b>{{ r.cnt }}</b>
+  </a>
+  {% endfor %}
+  <div class="card stat" style="border-top:4px solid var(--tx)">
+    <span class="muted">إجمالي الوثائق</span>
+    <b>{{ total }}</b>
+  </div>
+</div>
+
+<div class="dash">
+  <div class="card">
+    <h3>توزيع الوثائق حسب النوع</h3>
+    <div class="donut-wrap">
+      <div class="donut" style="background:{{ donut }}"><span>{{ total }}<small>وثيقة</small></span></div>
+      <ul class="legend">
+        {% for r in rows %}
+        <li><i style="background:{{ r.color }}"></i>{{ r.name }} <b>{{ r.cnt }}</b> <span class="muted">({{ r.pct }}%)</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>عدد الوثائق لكل تصنيف</h3>
+    {% for r in rows %}
+    <a class="bar-row" href="{{ url_for('index', cat=r.id) if r.id else url_for('index') }}">
+      <span class="bar-name">{{ r.name }}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:{{ r.bar }}%;background:{{ r.color }}"></span></span>
+      <b>{{ r.cnt }}</b>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>آخر الوثائق المضافة</h3>
+  <table>
+    <tr><th>العنوان</th><th>التصنيف</th><th>تاريخ الأرشفة</th></tr>
+    {% for d in recent %}
+    <tr><td><a href="{{ url_for('view', doc_id=d.id) }}">{{ d.title }}</a></td>
+        <td>{{ d.category or '—' }}</td><td>{{ d.created_at }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}
