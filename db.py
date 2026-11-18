@@ -1,6 +1,8 @@
 """طبقة قاعدة البيانات: MySQL للتشغيل الفعلي، SQLite للتجربة السريعة فقط."""
 import os
 import sqlite3
+from contextlib import contextmanager
+
 from flask import g
 
 ENGINE = os.getenv("DB_ENGINE", "mysql").lower()
@@ -14,10 +16,19 @@ CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, doc_number TEXT,
-  doc_date TEXT, category_id INTEGER, source TEXT, description TEXT,
+  doc_date TEXT, doc_date_h TEXT, doc_date_source TEXT, category_id INTEGER, source TEXT, description TEXT,
   filename TEXT NOT NULL, original_name TEXT NOT NULL, ocr_text TEXT,
   search_text TEXT, summary TEXT, uploaded_by INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL);
+CREATE INDEX IF NOT EXISTS idx_doc_date_h ON documents (doc_date_h);
+CREATE INDEX IF NOT EXISTS idx_created_at ON documents (created_at);
+CREATE TABLE IF NOT EXISTS document_edits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  edited_at TEXT NOT NULL, changes TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_edits_doc ON document_edits (document_id, edited_at);
 INSERT OR IGNORE INTO categories (name) VALUES
  ('تعميم'),('خطاب'),('قرار'),('محضر'),('نموذج'),('لائحة / تعليمات'),('أخرى');
 """
@@ -28,10 +39,14 @@ def _connect():
         path = os.getenv("SQLITE_PATH", "archive_dev.sqlite3")
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")  # لتعمل ON DELETE CASCADE / SET NULL
         return conn
     import pymysql
     import pymysql.cursors
+    # الجلسة بتوقيت UTC: created_at (TIMESTAMP) يُقرأ UTC مهما كان توقيت جهاز الخادم،
+    # ونخزّن updated_at/edited_at (DATETIME) UTC أيضاً، ونحوّل للرياض عند العرض فقط.
     return pymysql.connect(
+        init_command="SET time_zone = '+00:00'",
         host=os.getenv("DB_HOST", "localhost"),
         port=int(os.getenv("DB_PORT", "3306")),
         user=os.getenv("DB_USER", "root"),
@@ -73,11 +88,28 @@ def execute(sql, params=()):
     conn = get_db()
     cur = conn.cursor()
     cur.execute(_sql(sql), params)
-    if ENGINE == "sqlite":
+    if ENGINE == "sqlite" and not g.get("in_tx"):
         conn.commit()
     last = cur.lastrowid
     cur.close()
     return last
+
+
+@contextmanager
+def transaction():
+    """ينفّذ عدة execute كوحدة واحدة: إما تُحفظ كلها أو لا يُحفظ شيء."""
+    conn = get_db()
+    if ENGINE != "sqlite":
+        conn.begin()  # START TRANSACTION (يعلّق autocommit حتى commit/rollback)
+    g.in_tx = True
+    try:
+        yield
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        g.in_tx = False
 
 
 def init_sqlite():

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "_hijri.html" as hp %}
+{% block title %}وثائق تحتاج تاريخاً{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>وثائق تحتاج تاريخاً <span class="count">{{ total }}</span></h1>
+  <a class="btn ghost sm" href="{{ url_for('index') }}">الأرشيف</a>
+</div>
+<p class="muted small">هذه الوثائق بلا <b>تاريخ وثيقة</b>، لذلك لا تظهر في البحث بتاريخ الوثيقة. تاريخ الوثيقة هو تاريخ إصدارها
+  المكتوب في ترويستها، وليس تاريخ أرشفتها. ما يظهر بعلامة «مقترح» استُخرج من نص الوثيقة ولا يُحفظ إلا بضغط «حفظ».</p>
+{% if rows %}
+<div class="card table-wrap">
+  <table class="missing">
+    <tr><th>الوثيقة</th><th>تاريخ الأرشفة</th><th>تاريخ الوثيقة</th><th></th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('view', doc_id=r.id) }}">{{ r.title }}</a></td>
+      <td class="muted small">{{ r.created_at|riyadh or '—' }}</td>
+      <td>
+        <form method="post" action="{{ url_for('set_date', doc_id=r.id) }}" id="f{{ r.id }}" class="row-date">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="next" value="missing">
+          {{ hp.picker("doc_date_h", r.suggest or "", optional=False, label="تاريخ الوثيقة: " ~ r.title, uid="d" ~ r.id) }}
+          {% if r.suggest %}<span class="tag suggest">مقترح</span>{% endif %}
+        </form>
+      </td>
+      <td><button class="btn sm" form="f{{ r.id }}">حفظ</button></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% if total > rows|length %}<p class="muted small">يُعرض أحدث {{ rows|length }} من {{ total }}.</p>{% endif %}
+{% else %}
+<div class="empty card">✓ كل الوثائق لها تاريخ.</div>
+{% endif %}
+{{ hp.script(HIJRI) }}
+{% endblock %}

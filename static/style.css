@@ -60,5 +60,89 @@ a.stat:hover{transform:translateY(-3px);transition:.15s}
 .bar-row{display:flex;align-items:center;gap:.7rem;margin:.55rem 0;color:var(--tx)}
 .bar-name{width:105px;flex:none;font-size:.9rem}.bar-track{flex:1;background:#eef2f0;border-radius:99px;height:14px;overflow:hidden}
 .bar-fill{display:block;height:100%;border-radius:99px;min-width:2px}
+/* ---- مكوّن التقويم الهجري (static/hijri-picker.js) ---- */
+.hdp{position:relative;max-width:22rem}
+.hdp-field{position:relative}
+.hdp-text{cursor:pointer;padding-left:2.4rem;background:#fff}
+.hdp-icon{position:absolute;left:.4rem;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--g);cursor:pointer;padding:.25rem;display:flex}
+.hdp:not(.hdp-ready) .hdp-icon{opacity:.35;cursor:default}
+.hdp-pop{position:absolute;top:calc(100% + 6px);right:0;z-index:50;width:19rem;background:var(--card);border:1px solid var(--bd);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:.7rem}
+.hdp-pop.hdp-up{top:auto;bottom:calc(100% + 6px)}
+.hdp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+.hdp-nav{width:2rem;height:2rem;border:1px solid var(--bd);background:#fff;border-radius:8px;cursor:pointer;font-size:1.25rem;line-height:1;color:var(--g)}
+.hdp-nav:disabled{opacity:.3;cursor:default}
+.hdp-title{display:flex;gap:.2rem}
+.hdp-title-btn{border:0;background:none;font:inherit;font-weight:700;color:var(--tx);cursor:pointer;padding:.15rem .5rem;border-radius:8px}
+.hdp-title-btn:hover{background:#eef8f3}.hdp-title-text{font-weight:700}
+.hdp-days{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.hdp-wd{font-size:.68rem;color:var(--mu);padding:.2rem 0}
+.hdp-day{aspect-ratio:1;border:0;background:none;border-radius:8px;font:inherit;font-size:.88rem;cursor:pointer;color:var(--tx);padding:0}
+.hdp-day:hover{background:#eef8f3}
+.hdp-day.is-today{box-shadow:inset 0 0 0 2px var(--amber);font-weight:700}
+.hdp-day.is-selected{background:var(--g);color:#fff;font-weight:700}
+.hdp-day.is-disabled,.hdp-cell.is-disabled{color:#c2cbc7;background:none;cursor:not-allowed}
+.hdp-day:focus-visible,.hdp-cell:focus-visible,.hdp-act:focus-visible,.hdp-nav:focus-visible,.hdp-title-btn:focus-visible{outline:2px solid #2e9e7a;outline-offset:1px}
+.hdp-grid{display:grid;gap:.35rem}
+.hdp-months{grid-template-columns:repeat(3,1fr)}
+.hdp-years{grid-template-columns:repeat(4,1fr);max-height:14rem;overflow:auto;padding:2px}
+.hdp-cell{border:1px solid var(--bd);background:#fff;border-radius:8px;padding:.45rem .2rem;font:inherit;font-size:.85rem;cursor:pointer;color:var(--tx)}
+.hdp-cell.is-today{font-weight:700;border-color:var(--amber)}
+.hdp-cell.is-cursor{background:var(--g);color:#fff;border-color:var(--g)}
+.hdp-foot{display:flex;gap:.4rem;margin-top:.6rem;border-top:1px solid var(--bd);padding-top:.55rem}
+.hdp-act{border:1px solid var(--g);background:#fff;color:var(--g);border-radius:8px;padding:.25rem .8rem;font:inherit;font-size:.85rem;cursor:pointer}
+.hdp-act:disabled{opacity:.4;cursor:default}
+.hdp-clear{color:var(--red);border-color:var(--red)}
+.hdp-close{margin-inline-start:auto;border-color:var(--bd);color:var(--mu)}
+.hdp-backdrop{display:none}
+.field{margin-bottom:.8rem}.field-label{display:block;font-size:.9rem;color:var(--mu);margin-bottom:.25rem}
+.field>small{display:block;margin-top:.3rem}
+.date-range{display:flex;gap:1rem;flex-basis:100%;flex-wrap:wrap}
+.date-range .grp{display:flex;align-items:center;gap:.6rem;flex:1 1 300px}
+.date-range .grp>span{white-space:nowrap}
+.date-range .grp .hdp{flex:1}
+/* زر التبديل (تاريخ الوثيقة / تاريخ الرفع): راديو حقيقي مخفي بصرياً + تسميات بشكل مقطعين متجاورين */
+.date-by-row{flex:0 0 100%}
+.date-by{position:relative;display:inline-flex;border:1px solid var(--g);border-radius:10px;overflow:hidden;background:#fff}
+.date-by input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.date-by label{display:block;margin:0;padding:.4rem 1rem;font-size:.9rem;color:var(--g);cursor:pointer;white-space:nowrap;user-select:none}
+.date-by label+input+label{border-inline-start:1px solid var(--g)}
+.date-by input:checked+label{background:var(--g);color:#fff;font-weight:600}
+.date-by input:focus-visible+label{outline:2px solid #2e9e7a;outline-offset:-3px}
+.meta.up-date{margin-top:.15rem}
+@media(max-width:600px){
+  .date-range .grp{flex-direction:column;align-items:stretch;gap:.2rem}
+  .date-by{display:flex}.date-by label{flex:1;text-align:center;padding:.5rem .4rem}
+  .hdp{max-width:none}
+  /* على الجوال: نافذة سفلية ثابتة داخل حدود الشاشة مع خلفية معتمة */
+  .hdp-pop,.hdp-pop.hdp-up{position:fixed;top:auto;bottom:8px;left:8px;right:8px !important;width:auto;max-height:85vh;overflow:auto;z-index:1001}
+  .hdp-backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000}
+}
+/* ---- تاريخ الوثيقة: شارة «غير محدد»، التنبيه في صفحة الوثيقة، صفحة «وثائق تحتاج تاريخاً» ---- */
+.badge-missing{display:inline-block;background:#fff5df;color:#8a5a00;border:1px solid #e9c46a;border-radius:99px;padding:0 .6rem;font-size:.8rem;font-weight:600}
+.meta.dates{display:flex;flex-wrap:wrap;gap:.2rem 1rem;margin-top:.2rem}
+.need-date{background:#fff9ea;border:1px solid #e9c46a;border-radius:12px;padding:.7rem .9rem;margin:0 0 .9rem}
+.need-date p{margin:0 0 .5rem;color:#7a5410}
+.need-date-row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.need-date-row .hdp{flex:1;min-width:14rem}
+.need-date small{display:block;margin-top:.4rem}
+.need-date-link{border-color:var(--amber);color:#8a5a00}
+.auto-filled,.hdp.auto-filled .hdp-text{background:#f3faf6}
+.analyze-status{margin:-.4rem 0 .8rem}
+.table-wrap{overflow-x:auto}
+table.missing td{vertical-align:middle}
+.row-date{display:flex;align-items:center;gap:.5rem;margin:0}.row-date .hdp{flex:1;min-width:13rem}
+.tag.suggest{background:#fff5df;color:#8a5a00;white-space:nowrap}
+@media(max-width:600px){
+  table.missing,table.missing tbody,table.missing tr,table.missing td{display:block;width:100%}
+  table.missing tr:first-child{display:none}
+  table.missing tr{border-bottom:1px solid var(--bd);padding:.5rem 0}
+  table.missing td{border:0;padding:.2rem 0}
+}
+/* ---- آخر تعديل وسجل التعديلات (view.html) ---- */
+.last-edit{background:#f6f8f7;border-radius:10px;padding:.6rem .8rem;margin:0 0 .8rem;font-size:.9rem}
+.edit-log{margin-bottom:1rem}.edit-log summary{cursor:pointer;color:var(--g);font-weight:600}
+.edit-log ol{list-style:none;padding:0;margin:.5rem 0 0}
+.edit-log>ol>li{border-inline-start:3px solid var(--bd);padding:.3rem .7rem;margin-bottom:.5rem}
+.edit-meta{font-size:.82rem;color:var(--mu)}
+.edit-log ul{margin:.2rem 0 0;padding-inline-start:1.1rem;font-size:.88rem}
 .login-wrap{display:flex;justify-content:center;padding-top:5vh}.login{width:380px;text-align:center}
 .login label{text-align:right}.login-logo{display:block;height:110px;width:auto;margin:0 auto .5rem}.login h1{font-size:1.3rem}

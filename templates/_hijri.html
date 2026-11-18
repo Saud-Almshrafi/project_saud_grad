@@ -1,0 +1,25 @@
+{# مكوّن التقويم الهجري: خانة واحدة للقراءة فقط تفتح تقويماً منبثقاً (static/hijri-picker.js).
+   الاستخدام:
+     {% import "_hijri.html" as hp %}
+     {{ hp.picker("doc_date_h", "1447-05-12") }}                         ← حقل واحد
+     {{ hp.picker("date_from", v, role="from", pair="hdp-date_to") }}     ← زوج «من/إلى»
+     {{ hp.script(HIJRI) }}                                              ← مرة واحدة في الصفحة
+   القيمة تُرسل في input مخفي بنفس الاسم وبصيغة YYYY-MM-DD هجري، والخادم يتحقق نهائياً. #}
+{% macro picker(name, value="", optional=True, role="", pair="", label="التاريخ الهجري", uid="") %}
+<div class="hdp" id="hdp-{{ uid or name }}" data-hdp{% if optional %} data-optional{% endif %}{% if role %} data-role="{{ role }}"{% endif %}{% if pair %} data-pair="{{ pair }}"{% endif %}>
+  <input type="hidden" name="{{ name }}" value="{{ value or '' }}" data-value>
+  <div class="hdp-field">
+    <input type="text" class="hdp-text" readonly value="{{ value|hijri if value else '' }}" placeholder="اختر التاريخ"
+           aria-label="{{ label }}" aria-haspopup="dialog" aria-expanded="false" data-display>
+    <button type="button" class="hdp-icon" aria-label="فتح التقويم" tabindex="-1" data-open>
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 2h2v2h6V2h2v2h3a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3V2Zm12 8H5v9h14v-9ZM5 8h14V6H5v2Zm2 4h3v3H7v-3Z"/></svg>
+    </button>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro script(H) %}
+<script type="application/json" id="hijri-calendar-data">{{ H|tojson }}</script>
+<script src="{{ url_for('static', filename='hijri-picker.js') }}"></script>
+<noscript><p class="muted small">لتغيير التاريخ يلزم تفعيل JavaScript في المتصفح.</p></noscript>
+{% endmacro %}
