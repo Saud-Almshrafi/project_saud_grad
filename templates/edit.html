@@ -11,7 +11,8 @@
         {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if d.category_id == c.id }}>{{ c.name }}</option>{% endfor %}
       </select></label>
     <label>رقم الوثيقة<input name="doc_number" value="{{ d.doc_number or '' }}"></label>
-    <label>التاريخ<input name="doc_date" value="{{ d.doc_date or '' }}"></label>
+    <label>التاريخ كما في الوثيقة (هجري أو أي صيغة)<input name="doc_date" value="{{ d.doc_date or '' }}"></label>
+    <label>التاريخ الميلادي (اختياري)<input type="date" name="doc_date_greg" value="{{ d.doc_date_greg|isodate }}" max="{{ today_iso }}"></label>
     <label>الجهة<input name="source" value="{{ d.source or '' }}"></label>
   </div>
   <label>ملاحظات<textarea name="description" rows="3">{{ d.description or '' }}</textarea></label>
