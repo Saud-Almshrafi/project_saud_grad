@@ -27,8 +27,6 @@ label{display:block;font-size:.9rem;color:var(--mu);margin-bottom:.8rem}
 label input,label select,label textarea{margin-top:.25rem;color:var(--tx)}
 .search{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap}
 .search input[name=q],.search input[name=name]{flex:1;min-width:200px}.search select{width:auto}
-.search .dt{display:flex;align-items:center;gap:.4rem;margin:0;white-space:nowrap;color:var(--tx)}.search .dt input{width:auto;margin:0}
-@media(max-width:600px){.search .dt{flex:1 1 100%}.search .dt input{flex:1;width:100%}}
 .check{display:flex;align-items:center;gap:.4rem;margin:0;white-space:nowrap;color:var(--tx)}.check input{width:auto;margin:0}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem}
 .ai-box{display:flex;gap:.7rem;background:#eef8f3;border:1px dashed var(--g);padding:.8rem;border-radius:12px;color:var(--tx)}

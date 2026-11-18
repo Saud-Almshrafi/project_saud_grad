@@ -2,7 +2,6 @@
 import os
 import secrets
 import uuid
-from datetime import date
 from functools import wraps
 
 from flask import (Flask, abort, flash, g, redirect, render_template, request,
@@ -10,7 +9,6 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai
-import dates
 import db
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,17 +36,6 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 app.teardown_appcontext(db.close_db)
-
-
-@app.template_filter("isodate")
-def _isodate(v):
-    """يعرض DATE (من MySQL) أو نص (من SQLite) بصيغة YYYY-MM-DD، وفارغاً إن لم يوجد."""
-    return str(v)[:10] if v else ""
-
-
-@app.context_processor
-def _date_ctx():
-    return {"today_iso": date.today().isoformat()}
 
 
 # ------------------------------------------------------------ مساعدات الجلسة
@@ -145,36 +132,12 @@ def index():
     q = request.args.get("q", "").strip()
     cat = request.args.get("cat", type=int)
     smart = request.args.get("smart") == "1"
-    date_from_raw = request.args.get("date_from", "").strip()
-    date_to_raw = request.args.get("date_to", "").strip()
-    d_from, d_to, date_ok = None, None, True
-    for raw, label in ((date_from_raw, "من"), (date_to_raw, "إلى")):
-        iso, err = dates.parse_form_date(raw)
-        if err:
-            flash(f"تاريخ «{label}»: {err}", "error")
-            date_ok = False
-        elif label == "من":
-            d_from = iso
-        else:
-            d_to = iso
-    if date_ok and d_from and d_to and d_from > d_to:
-        flash("تاريخ «من» يجب ألا يكون بعد تاريخ «إلى»، لم يُطبَّق فلتر التاريخ.", "error")
-        date_ok = False
-    if not date_ok:  # أي خطأ → لا نطبّق فلتر التاريخ إطلاقاً
-        d_from = d_to = None
     where, params = [], []
     if cat:
         where.append("d.category_id=%s")
         params.append(cat)
-    if d_from:
-        where.append("d.doc_date_greg>=%s")
-        params.append(d_from)
-    if d_to:
-        where.append("d.doc_date_greg<=%s")
-        params.append(d_to)
-    sql = ("SELECT d.id, d.title, d.doc_number, d.doc_date, d.doc_date_greg, d.source, d.description, d.summary, "
-           "d.created_at, d.search_text, c.name AS category FROM documents d "
-           "LEFT JOIN categories c ON c.id=d.category_id")
+    sql = ("SELECT d.id, d.title, d.doc_number, d.doc_date, d.source, d.description, d.summary, d.created_at, "
+           "d.search_text, c.name AS category FROM documents d LEFT JOIN categories c ON c.id=d.category_id")
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY d.id DESC"
@@ -191,11 +154,7 @@ def index():
         d.pop("search_text", None)
     cats = db.query("SELECT * FROM categories ORDER BY name")
     stats = db.query("SELECT COUNT(*) AS n FROM documents", one=True)
-    no_greg = None
-    if d_from or d_to:  # وثائق بلا تاريخ ميلادي تُستبعد من نتائج فلتر التاريخ
-        no_greg = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_greg IS NULL", one=True)["n"]
-    return render_template("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"],
-                           date_from=date_from_raw, date_to=date_to_raw, no_greg=no_greg)
+    return render_template("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"])
 
 
 # --------------------------------------------------------------- رفع وثيقة
@@ -210,10 +169,6 @@ def upload():
             return render_template("upload.html", cats=cats)
         if not allowed(f.filename):
             flash("نوع الملف غير مدعوم. المسموح: PDF أو صورة", "error")
-            return render_template("upload.html", cats=cats)
-        date_greg, date_err = dates.parse_form_date(request.form.get("doc_date_greg"))
-        if date_err:  # نتحقق قبل حفظ الملف حتى لا يبقى ملف يتيم على القرص
-            flash(f"التاريخ الميلادي: {date_err}", "error")
             return render_template("upload.html", cats=cats)
         ext = f.filename.rsplit(".", 1)[1].lower()
         stored = f"{uuid.uuid4().hex}.{ext}"
@@ -263,14 +218,12 @@ def upload():
                 flash("تعذّر استخراج نص من الملف، تأكد من وضوح الصورة.", "warn")
         if not title:
             title = os.path.splitext(f.filename)[0][:200] or "وثيقة بدون عنوان"
-        if not date_greg:  # المنتقي فارغ: نحاول من النص (المكتوب يدوياً أو استخرجه الذكاء الاصطناعي)
-            date_greg = dates.clear_gregorian(date)
 
         doc_id = db.execute(
-            "INSERT INTO documents (title, doc_number, doc_date, doc_date_greg, category_id, source, description, "
-            "filename, original_name, ocr_text, search_text, summary, uploaded_by) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (title, number or None, date or None, date_greg, cat_id or None, source or None, desc or None, stored,
+            "INSERT INTO documents (title, doc_number, doc_date, category_id, source, description, filename, "
+            "original_name, ocr_text, search_text, summary, uploaded_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (title, number or None, date or None, cat_id or None, source or None, desc or None, stored,
              f.filename[:250], text, ai.build_search_text(title, number, source, desc, text), summary or None,
              g.user["id"]))
         msg = "تمت أرشفة الوثيقة بنجاح"
@@ -317,16 +270,9 @@ def edit(doc_id):
         f = request.form
         title = f.get("title", "").strip() or d["title"]
         number, source, desc = f.get("doc_number", "").strip(), f.get("source", "").strip(), f.get("description", "").strip()
-        date_text = f.get("doc_date", "").strip()
-        date_greg, date_err = dates.parse_form_date(f.get("doc_date_greg"))
-        if date_err:
-            flash(f"التاريخ الميلادي: {date_err}", "error")
-            return render_template("edit.html", d=d, cats=cats)
-        if not date_greg:  # المنتقي فارغ: نحاول من النص
-            date_greg = dates.clear_gregorian(date_text)
-        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date=%s, doc_date_greg=%s, category_id=%s, "
-                   "source=%s, description=%s, summary=%s, search_text=%s WHERE id=%s",
-                   (title, number or None, date_text or None, date_greg, f.get("category_id", type=int),
+        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date=%s, category_id=%s, source=%s, "
+                   "description=%s, summary=%s, search_text=%s WHERE id=%s",
+                   (title, number or None, f.get("doc_date", "").strip() or None, f.get("category_id", type=int),
                     source or None, desc or None, f.get("summary", "").strip() or None,
                     ai.build_search_text(title, number, source, desc, d["ocr_text"] or ""), doc_id))
         flash("تم حفظ التعديلات", "ok")

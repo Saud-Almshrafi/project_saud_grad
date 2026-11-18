@@ -21,11 +21,9 @@
   </div>
   <div class="row">
     <label>رقم الوثيقة<input name="doc_number"></label>
-    <label>التاريخ كما في الوثيقة (هجري أو أي صيغة)<input name="doc_date" placeholder="مثال: 1447/05/12 هـ"></label>
-    <label>التاريخ الميلادي (اختياري)<input type="date" name="doc_date_greg" max="{{ today_iso }}"></label>
+    <label>التاريخ (هجري أو ميلادي)<input name="doc_date" placeholder="مثال: 1447/05/12"></label>
     <label>الجهة المصدرة<input name="source"></label>
   </div>
-  <p class="muted small">للبحث بين تاريخين يُستخدم التاريخ الميلادي. إن تركته فارغاً وكان التاريخ المكتوب ميلادياً واضحاً (مثل 2025/03/12) فسيُملأ تلقائياً.</p>
   <label>ملاحظات<textarea name="description" rows="3"></textarea></label>
   <button class="btn">حفظ وأرشفة</button>
 </form>

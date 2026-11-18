@@ -9,12 +9,9 @@
     <option value="">كل التصنيفات</option>
     {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if cat == c.id }}>{{ c.name }}</option>{% endfor %}
   </select>
-  <label class="dt">من تاريخ <input type="date" name="date_from" value="{{ date_from }}" max="{{ today_iso }}"></label>
-  <label class="dt">إلى تاريخ <input type="date" name="date_to" value="{{ date_to }}" max="{{ today_iso }}"></label>
   <label class="check"><input type="checkbox" name="smart" value="1" {{ 'checked' if smart }}> 🤖 بحث ذكي</label>
   <button class="btn">بحث</button>
 </form>
-{% if no_greg %}<p class="muted small">⚠ يوجد {{ no_greg }} وثيقة في الأرشيف ليس لها تاريخ ميلادي، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}
 {% if q and smart %}<p class="muted small">البحث الذكي يرتّب النتائج بالأقرب معنى، ويفهم الكلمات المتشابهة (مثل: إجازة ↔ عطلة).</p>{% endif %}
 
 {% if docs %}
@@ -29,7 +26,6 @@
     <p class="meta">
       {% if d.doc_number %}رقم: {{ d.doc_number }}{% endif %}
       {% if d.doc_date %} · {{ d.doc_date }}{% endif %}
-      {% if d.doc_date_greg %} · ميلادي: {{ d.doc_date_greg|isodate }}{% endif %}
       {% if d.source %} · {{ d.source }}{% endif %}
     </p>
     {% if d.summary %}<p class="sum">{{ d.summary[:140] }}{{ '…' if d.summary|length > 140 }}</p>{% endif %}

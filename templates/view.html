@@ -18,7 +18,6 @@
       <dt>التصنيف</dt><dd>{{ d.category or '—' }}</dd>
       <dt>رقم الوثيقة</dt><dd>{{ d.doc_number or '—' }}</dd>
       <dt>التاريخ</dt><dd>{{ d.doc_date or '—' }}</dd>
-      {% if d.doc_date_greg %}<dt>التاريخ الميلادي</dt><dd>{{ d.doc_date_greg|isodate }}</dd>{% endif %}
       <dt>الجهة</dt><dd>{{ d.source or '—' }}</dd>
       <dt>أُرشفت بواسطة</dt><dd>{{ d.uploader or '—' }}</dd>
       <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at }}</dd>

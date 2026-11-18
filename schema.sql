@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS documents (
   title VARCHAR(255) NOT NULL,
   doc_number VARCHAR(60),
   doc_date VARCHAR(20),              -- نص لدعم التاريخ الهجري والميلادي
-  doc_date_greg DATE NULL,           -- التاريخ الميلادي الواضح فقط (للبحث بالنطاق)
   category_id INT NULL,
   source VARCHAR(150),               -- الجهة المصدرة
   description TEXT,
@@ -35,8 +34,7 @@ CREATE TABLE IF NOT EXISTS documents (
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_doc_number (doc_number),
-  INDEX idx_category (category_id),
-  INDEX idx_doc_date_greg (doc_date_greg)
+  INDEX idx_category (category_id)
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO categories (name) VALUES
