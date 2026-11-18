@@ -47,10 +47,10 @@
 <div class="card">
   <h3>آخر الوثائق المضافة</h3>
   <table>
-    <tr><th>العنوان</th><th>التصنيف</th><th>تاريخ الأرشفة</th></tr>
+    <tr><th>العنوان</th><th>التصنيف</th><th>تاريخ الوثيقة</th><th>تاريخ الأرشفة</th></tr>
     {% for d in recent %}
     <tr><td><a href="{{ url_for('view', doc_id=d.id) }}">{{ d.title }}</a></td>
-        <td>{{ d.category or '—' }}</td><td>{{ d.created_at }}</td></tr>
+        <td>{{ d.category or '—' }}</td><td>{{ d.doc_date_h|hijri }}</td><td>{{ d.created_at }}</td></tr>
     {% endfor %}
   </table>
 </div>

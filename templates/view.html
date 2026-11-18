@@ -17,7 +17,9 @@
     <dl>
       <dt>التصنيف</dt><dd>{{ d.category or '—' }}</dd>
       <dt>رقم الوثيقة</dt><dd>{{ d.doc_number or '—' }}</dd>
-      <dt>التاريخ</dt><dd>{{ d.doc_date or '—' }}</dd>
+      {% if d.doc_date_h %}<dt>التاريخ</dt><dd>{{ d.doc_date_h|hijri }}
+        {% if orig_date %}<br><small class="muted">النص الأصلي في الوثيقة: <bdi>{{ orig_date }}</bdi></small>{% endif %}</dd>
+      {% elif orig_date %}<dt>التاريخ</dt><dd><small class="muted">النص الأصلي في الوثيقة: <bdi>{{ orig_date }}</bdi></small></dd>{% endif %}
       <dt>الجهة</dt><dd>{{ d.source or '—' }}</dd>
       <dt>أُرشفت بواسطة</dt><dd>{{ d.uploader or '—' }}</dd>
       <dt>تاريخ الأرشفة</dt><dd>{{ d.created_at }}</dd>

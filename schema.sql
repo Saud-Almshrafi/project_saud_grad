@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS documents (
   id INT AUTO_INCREMENT PRIMARY KEY,
   title VARCHAR(255) NOT NULL,
   doc_number VARCHAR(60),
-  doc_date VARCHAR(20),              -- نص لدعم التاريخ الهجري والميلادي
+  doc_date VARCHAR(20),              -- النص الأصلي للتاريخ كما في الوثيقة (أرشيف فقط)
+  doc_date_h CHAR(10) NULL,          -- التاريخ الهجري المعتمد بصيغة YYYY-MM-DD (نص لأن DATE يرفض 30 صفر مثلاً)
   category_id INT NULL,
   source VARCHAR(150),               -- الجهة المصدرة
   description TEXT,
@@ -34,7 +35,8 @@ CREATE TABLE IF NOT EXISTS documents (
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_doc_number (doc_number),
-  INDEX idx_category (category_id)
+  INDEX idx_category (category_id),
+  INDEX idx_doc_date_h (doc_date_h)
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO categories (name) VALUES

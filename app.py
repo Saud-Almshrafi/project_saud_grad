@@ -10,6 +10,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai
 import db
+import hijri_utils as hu
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ALLOWED_EXT = {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}
@@ -56,6 +57,25 @@ def inject():
     if "csrf" not in session:
         session["csrf"] = secrets.token_hex(16)
     return {"csrf_token": session["csrf"], "ROLES": ROLES}
+
+
+@app.template_filter("hijri")
+def _hijri_filter(s):
+    return hu.format_hijri(s)
+
+
+def picker_value(prefix, src):
+    """القيم المختارة لمكوّن التاريخ الهجري من request.args/form (كنصوص) لإعادة عرضها."""
+    return {k: (src.get(f"{prefix}_{k}") or "").strip() for k in ("y", "m", "d")}
+
+
+def iso_to_picker(iso):
+    p = hu.split_iso(iso)
+    return {"y": str(p[0]), "m": str(p[1]), "d": str(p[2])} if p else {"y": "", "m": "", "d": ""}
+
+
+def render_with_picker(tpl, **kw):
+    return render_template(tpl, HIJRI=hu.picker_context(), **kw)
 
 
 def login_required(roles=None):
@@ -120,7 +140,7 @@ def dashboard():
             acc += r["pct"]
     donut = "conic-gradient(" + ", ".join(stops) + ")" if stops else "#e6ece9"
     recent = db.query(
-        "SELECT d.id, d.title, d.created_at, c.name AS category FROM documents d "
+        "SELECT d.id, d.title, d.doc_date_h, d.created_at, c.name AS category FROM documents d "
         "LEFT JOIN categories c ON c.id=d.category_id ORDER BY d.id DESC LIMIT 5")
     return render_template("dashboard.html", rows=rows, total=total, donut=donut, recent=recent)
 
@@ -132,11 +152,29 @@ def index():
     q = request.args.get("q", "").strip()
     cat = request.args.get("cat", type=int)
     smart = request.args.get("smart") == "1"
+    f_from, f_to = picker_value("from", request.args), picker_value("to", request.args)
+    today = hu.today_hijri()
+    d_from, err_from = hu.range_bound(f_from["y"], f_from["m"], f_from["d"], end=False, today=today)
+    d_to, err_to = hu.range_bound(f_to["y"], f_to["m"], f_to["d"], end=True, today=today)
+    for err, label in ((err_from, "من"), (err_to, "إلى")):
+        if err:
+            flash(f"تاريخ «{label}»: {err}", "error")
+    if err_from or err_to:
+        d_from = d_to = None  # أي خطأ → لا يُطبَّق فلتر التاريخ
+    elif d_from and d_to and d_from > d_to:
+        flash("تاريخ «من» يجب ألا يكون بعد تاريخ «إلى»، لم يُطبَّق فلتر التاريخ.", "error")
+        d_from = d_to = None
     where, params = [], []
     if cat:
         where.append("d.category_id=%s")
         params.append(cat)
-    sql = ("SELECT d.id, d.title, d.doc_number, d.doc_date, d.source, d.description, d.summary, d.created_at, "
+    if d_from:  # مقارنة نصية صحيحة لأن الصيغة منتظمة YYYY-MM-DD
+        where.append("d.doc_date_h>=%s")
+        params.append(d_from)
+    if d_to:
+        where.append("d.doc_date_h<=%s")
+        params.append(d_to)
+    sql = ("SELECT d.id, d.title, d.doc_number, d.doc_date_h, d.source, d.description, d.summary, d.created_at, "
            "d.search_text, c.name AS category FROM documents d LEFT JOIN categories c ON c.id=d.category_id")
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -154,7 +192,11 @@ def index():
         d.pop("search_text", None)
     cats = db.query("SELECT * FROM categories ORDER BY name")
     stats = db.query("SELECT COUNT(*) AS n FROM documents", one=True)
-    return render_template("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"])
+    no_date = None
+    if d_from or d_to:  # الوثائق بلا تاريخ تُستبعد عند الفلتر
+        no_date = db.query("SELECT COUNT(*) AS n FROM documents WHERE doc_date_h IS NULL", one=True)["n"]
+    return render_with_picker("index.html", docs=docs, cats=cats, q=q, cat=cat, smart=smart, total=stats["n"],
+                              f_from=f_from, f_to=f_to, no_date=no_date)
 
 
 # --------------------------------------------------------------- رفع وثيقة
@@ -162,14 +204,20 @@ def index():
 @login_required({"admin", "clerk"})
 def upload():
     cats = db.query("SELECT * FROM categories ORDER BY name")
+    pick = picker_value("doc", request.form)
     if request.method == "POST":
         f = request.files.get("file")
         if not f or not f.filename:
             flash("اختر ملفاً للرفع", "error")
-            return render_template("upload.html", cats=cats)
+            return render_with_picker("upload.html", cats=cats, pick=pick)
         if not allowed(f.filename):
             flash("نوع الملف غير مدعوم. المسموح: PDF أو صورة", "error")
-            return render_template("upload.html", cats=cats)
+            return render_with_picker("upload.html", cats=cats, pick=pick)
+        today = hu.today_hijri()
+        date_h, date_err = hu.from_picker(pick["y"], pick["m"], pick["d"], today=today)
+        if date_err:  # نتحقق قبل حفظ الملف حتى لا يبقى ملف يتيم على القرص
+            flash(f"التاريخ: {date_err}", "error")
+            return render_with_picker("upload.html", cats=cats, pick=pick)
         ext = f.filename.rsplit(".", 1)[1].lower()
         stored = f"{uuid.uuid4().hex}.{ext}"
         path = os.path.join(app.config["UPLOAD_FOLDER"], stored)
@@ -177,7 +225,7 @@ def upload():
 
         title = request.form.get("title", "").strip()
         number = request.form.get("doc_number", "").strip()
-        date = request.form.get("doc_date", "").strip()
+        date = ""  # النص الأصلي للتاريخ كما استخرجه الذكاء الاصطناعي (يُحفظ في doc_date للأرشيف فقط)
         cat_id = request.form.get("category_id", type=int)
         source = request.form.get("source", "").strip()
         desc = request.form.get("description", "").strip()
@@ -190,6 +238,7 @@ def upload():
                 summary = ai.summarize(text)
                 fields = ai.extract_fields(text)
                 gem = ai.gemini_analyze(text, [c["name"] for c in cats])
+                date_numeric = gem["doc_date_numeric"] if gem else None
                 if gem:  # Gemini أدق؛ وإن فشل نبقى على النتائج المحلية
                     summary = gem["summary"] or summary
                     for k in ("title", "doc_number", "doc_date", "source"):
@@ -205,8 +254,11 @@ def upload():
                     title = fields["title"]; notes.append("العنوان")
                 if not number and fields["doc_number"]:
                     number = fields["doc_number"]; notes.append("الرقم")
-                if not date and fields["doc_date"]:
-                    date = fields["doc_date"]; notes.append("التاريخ")
+                date = fields["doc_date"] or ""
+                if not date_h:  # القوائم فارغة: نعبّئ من الوثيقة (الميلادي يُحوَّل لهجري، والغامض يُترك)
+                    auto = hu.parse_any_date(date_numeric) or hu.parse_any_date(date)
+                    if auto and auto <= today:
+                        date_h = auto; notes.append("التاريخ")
                 if not source and fields["source"]:
                     source = fields["source"][:150]; notes.append("الجهة")
                 if not cat_id:
@@ -220,10 +272,10 @@ def upload():
             title = os.path.splitext(f.filename)[0][:200] or "وثيقة بدون عنوان"
 
         doc_id = db.execute(
-            "INSERT INTO documents (title, doc_number, doc_date, category_id, source, description, filename, "
-            "original_name, ocr_text, search_text, summary, uploaded_by) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (title, number or None, date or None, cat_id or None, source or None, desc or None, stored,
+            "INSERT INTO documents (title, doc_number, doc_date, doc_date_h, category_id, source, description, "
+            "filename, original_name, ocr_text, search_text, summary, uploaded_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (title, number or None, date[:20] or None, date_h, cat_id or None, source or None, desc or None, stored,
              f.filename[:250], text, ai.build_search_text(title, number, source, desc, text), summary or None,
              g.user["id"]))
         msg = "تمت أرشفة الوثيقة بنجاح"
@@ -231,7 +283,7 @@ def upload():
             msg += " — عبّأ الذكاء الاصطناعي: " + "، ".join(notes)
         flash(msg, "ok")
         return redirect(url_for("view", doc_id=doc_id))
-    return render_template("upload.html", cats=cats)
+    return render_with_picker("upload.html", cats=cats, pick=pick)
 
 
 # --------------------------------------------------------- عرض/تعديل/حذف
@@ -249,7 +301,10 @@ def get_doc(doc_id):
 def view(doc_id):
     d = get_doc(doc_id)
     ext = d["filename"].rsplit(".", 1)[1].lower()
-    return render_template("view.html", d=d, is_pdf=(ext == "pdf"))
+    # النص القديم يُعرض كملاحظة فقط إن اختلف عن التاريخ المعتمد (ليس هو نفسه مكتوباً هجرياً)
+    orig = (d.get("doc_date") or "").strip()
+    show_orig = bool(orig) and hu.parse_any_date_kind(orig) != ((d.get("doc_date_h"), "h") if d.get("doc_date_h") else None)
+    return render_template("view.html", d=d, is_pdf=(ext == "pdf"), orig_date=orig if show_orig else None)
 
 
 @app.route("/file/<int:doc_id>")
@@ -268,16 +323,25 @@ def edit(doc_id):
     cats = db.query("SELECT * FROM categories ORDER BY name")
     if request.method == "POST":
         f = request.form
+        pick = picker_value("doc", f)
+        if not any(k in f for k in ("doc_y", "doc_m", "doc_d")):  # المكوّن لم يُرسل أصلاً → لا نغيّر التاريخ
+            date_h, date_err = d.get("doc_date_h"), None
+        else:
+            date_h, date_err = hu.from_picker(pick["y"], pick["m"], pick["d"])
+        if date_err:
+            flash(f"التاريخ: {date_err}", "error")
+            return render_with_picker("edit.html", d=d, cats=cats, pick=pick)
         title = f.get("title", "").strip() or d["title"]
         number, source, desc = f.get("doc_number", "").strip(), f.get("source", "").strip(), f.get("description", "").strip()
-        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date=%s, category_id=%s, source=%s, "
+        # doc_date القديم لا يُلمس: يبقى أرشيفاً للنص الأصلي
+        db.execute("UPDATE documents SET title=%s, doc_number=%s, doc_date_h=%s, category_id=%s, source=%s, "
                    "description=%s, summary=%s, search_text=%s WHERE id=%s",
-                   (title, number or None, f.get("doc_date", "").strip() or None, f.get("category_id", type=int),
+                   (title, number or None, date_h, f.get("category_id", type=int),
                     source or None, desc or None, f.get("summary", "").strip() or None,
                     ai.build_search_text(title, number, source, desc, d["ocr_text"] or ""), doc_id))
         flash("تم حفظ التعديلات", "ok")
         return redirect(url_for("view", doc_id=doc_id))
-    return render_template("edit.html", d=d, cats=cats)
+    return render_with_picker("edit.html", d=d, cats=cats, pick=iso_to_picker(d.get("doc_date_h")))
 
 
 @app.route("/doc/<int:doc_id>/delete", methods=["POST"])

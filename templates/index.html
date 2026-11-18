@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_hijri.html" as hp %}
 {% block content %}
 <div class="page-head">
   <h1>أرشيف الوثائق <span class="count">{{ total }}</span></h1>
@@ -11,7 +12,12 @@
   </select>
   <label class="check"><input type="checkbox" name="smart" value="1" {{ 'checked' if smart }}> 🤖 بحث ذكي</label>
   <button class="btn">بحث</button>
+  <div class="date-range">
+    <div class="grp"><span>من تاريخ</span>{{ hp.picker("from", f_from, HIJRI) }}</div>
+    <div class="grp"><span>إلى تاريخ</span>{{ hp.picker("to", f_to, HIJRI) }}</div>
+  </div>
 </form>
+{% if no_date %}<p class="muted small">⚠ يوجد {{ no_date }} وثيقة في الأرشيف بلا تاريخ، ولذلك لا تظهر في نتائج البحث بالتاريخ.</p>{% endif %}
 {% if q and smart %}<p class="muted small">البحث الذكي يرتّب النتائج بالأقرب معنى، ويفهم الكلمات المتشابهة (مثل: إجازة ↔ عطلة).</p>{% endif %}
 
 {% if docs %}
@@ -25,7 +31,7 @@
     <h3>{{ d.title }}</h3>
     <p class="meta">
       {% if d.doc_number %}رقم: {{ d.doc_number }}{% endif %}
-      {% if d.doc_date %} · {{ d.doc_date }}{% endif %}
+      {% if d.doc_date_h %} · {{ d.doc_date_h|hijri }}{% endif %}
       {% if d.source %} · {{ d.source }}{% endif %}
     </p>
     {% if d.summary %}<p class="sum">{{ d.summary[:140] }}{{ '…' if d.summary|length > 140 }}</p>{% endif %}
@@ -35,4 +41,5 @@
 {% else %}
 <div class="empty card">لا توجد وثائق مطابقة.</div>
 {% endif %}
+{{ hp.script(HIJRI) }}
 {% endblock %}

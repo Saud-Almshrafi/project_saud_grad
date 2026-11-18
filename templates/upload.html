@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_hijri.html" as hp %}
 {% block title %}أرشفة وثيقة{% endblock %}
 {% block content %}
 <div class="page-head"><h1>أرشفة وثيقة جديدة</h1></div>
@@ -21,10 +22,15 @@
   </div>
   <div class="row">
     <label>رقم الوثيقة<input name="doc_number"></label>
-    <label>التاريخ (هجري أو ميلادي)<input name="doc_date" placeholder="مثال: 1447/05/12"></label>
     <label>الجهة المصدرة<input name="source"></label>
+  </div>
+  <div class="field">
+    <span class="field-label">التاريخ الهجري (اختياري)</span>
+    {{ hp.picker("doc", pick, HIJRI) }}
+    <small class="muted">اتركه فارغاً ليُستخرج تلقائياً من الوثيقة (والتاريخ الميلادي يُحوَّل إلى هجري).</small>
   </div>
   <label>ملاحظات<textarea name="description" rows="3"></textarea></label>
   <button class="btn">حفظ وأرشفة</button>
 </form>
+{{ hp.script(HIJRI) }}
 {% endblock %}

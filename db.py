@@ -14,10 +14,11 @@ CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, doc_number TEXT,
-  doc_date TEXT, category_id INTEGER, source TEXT, description TEXT,
+  doc_date TEXT, doc_date_h TEXT, category_id INTEGER, source TEXT, description TEXT,
   filename TEXT NOT NULL, original_name TEXT NOT NULL, ocr_text TEXT,
   search_text TEXT, summary TEXT, uploaded_by INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_doc_date_h ON documents (doc_date_h);
 INSERT OR IGNORE INTO categories (name) VALUES
  ('تعميم'),('خطاب'),('قرار'),('محضر'),('نموذج'),('لائحة / تعليمات'),('أخرى');
 """

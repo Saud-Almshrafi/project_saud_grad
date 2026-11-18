@@ -1,0 +1,57 @@
+{# مكوّن اختيار التاريخ الهجري: ثلاث قوائم (السنة، الشهر، اليوم) مع خيار فارغ في كل منها.
+   الاستخدام:  {% import "_hijri.html" as hp %}  ثم  {{ hp.picker("doc", pick, HIJRI) }}  و  {{ hp.script(HIJRI) }} مرة واحدة.
+   القيم تُرسل كـ <prefix>_y و <prefix>_m و <prefix>_d، والخادم يتحقق نهائياً. #}
+{% macro picker(prefix, value, H) %}
+{%- set v = value or {} -%}
+<div class="hpick" data-hpick>
+  <label><small>السنة</small>
+    <select name="{{ prefix }}_y" data-part="y">
+      <option value="">—</option>
+      {% for y in H.years %}<option value="{{ y }}" {{ 'selected' if v.y == y|string }}>{{ y }}</option>{% endfor %}
+    </select>
+  </label>
+  <label><small>الشهر</small>
+    <select name="{{ prefix }}_m" data-part="m">
+      <option value="">—</option>
+      {% for name in H.months %}<option value="{{ loop.index }}" {{ 'selected' if v.m == loop.index|string }}>{{ loop.index }} - {{ name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label><small>اليوم</small>
+    <select name="{{ prefix }}_d" data-part="d">
+      <option value="">—</option>
+      {% for d in range(1, 31) %}<option value="{{ d }}" {{ 'selected' if v.d == d|string }}>{{ d }}</option>{% endfor %}
+    </select>
+  </label>
+</div>
+{% endmacro %}
+
+{% macro script(H) %}
+<script>
+(function () {
+  var L = {{ H.lengths|tojson }}, T = {{ H.today|tojson }};
+  function setOpts(sel, isOff) {
+    for (var i = 0; i < sel.options.length; i++) {
+      var o = sel.options[i];
+      if (!o.value) continue;
+      var off = isOff(+o.value);
+      o.disabled = off; o.hidden = off;
+    }
+    if (sel.selectedIndex > 0 && sel.options[sel.selectedIndex].disabled) sel.value = "";
+  }
+  document.querySelectorAll("[data-hpick]").forEach(function (box) {
+    var y = box.querySelector("[data-part=y]"), m = box.querySelector("[data-part=m]"), d = box.querySelector("[data-part=d]");
+    function sync() {
+      var yv = +y.value || 0;
+      setOpts(m, function (mv) { return yv === T.y && mv > T.m; });          // لا أشهر بعد الشهر الحالي
+      var mv = +m.value || 0, max = 30;
+      if (yv && mv) {
+        max = (L[yv] || [])[mv - 1] || 30;                                     // 29 أو 30 حسب أم القرى
+        if (yv === T.y && mv === T.m) max = Math.min(max, T.d);                // لا أيام بعد اليوم
+      }
+      setOpts(d, function (dv) { return dv > max; });
+    }
+    y.addEventListener("change", sync); m.addEventListener("change", sync); sync();
+  });
+})();
+</script>
+{% endmacro %}

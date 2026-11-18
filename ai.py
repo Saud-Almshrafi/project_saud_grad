@@ -258,6 +258,8 @@ def gemini_analyze(text: str, categories: list[str]) -> dict | None:
         "title: عنوان مختصر للموضوع (أقل من 120 حرفاً)\n"
         "doc_number: رقم الوثيقة أو null\n"
         "doc_date: التاريخ كما ورد (هجري أو ميلادي) أو null\n"
+        "doc_date_numeric: نفس تاريخ الوثيقة بالأرقام بصيغة YYYY/MM/DD وبنفس تقويمه (هجري أو ميلادي، "
+        "مثلاً «12 جمادى الأولى 1447هـ» تصبح 1447/05/12) أو null إن لم يكن واضحاً\n"
         "source: الجهة المصدرة للوثيقة (الإدارة أو الوزارة أو المدرسة التي أصدرتها، من الترويسة أو التوقيع) أو null\n"
         f"category: واحد بالضبط من {json.dumps(categories, ensure_ascii=False)} أو null\n"
         "summary: ملخص بالعربية من 2 إلى 3 جمل يوضح المطلوب والجهة والمواعيد.\n"
@@ -268,7 +270,7 @@ def gemini_analyze(text: str, categories: list[str]) -> dict | None:
         if not isinstance(res, dict):
             return None
         return {k: (str(res[k]).strip() if res.get(k) else None)
-                for k in ("title", "doc_number", "doc_date", "source", "category", "summary")}
+                for k in ("title", "doc_number", "doc_date", "doc_date_numeric", "source", "category", "summary")}
     except Exception:
         return None
 
